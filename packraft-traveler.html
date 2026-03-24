@@ -614,6 +614,7 @@ let editSegIdx = null;
 
 // フリードロー関連
 let trekDrawing = false;      // フリードローモード中かどうか
+let trekDrawMode = 'trek';    // フリードロー中のモード（trek/walkfree/train）
 let legendControl = null;     // 地図凡例コントロール
 let trekFromIdx = null;       // フリードローの起点ポイントインデックス
 let trekToIdx = null;         // フリードローの終点ポイントインデックス
@@ -999,7 +1000,7 @@ function renderPointList() {
         trekBtn.style.cssText = 'font-size:10px;padding:2px 8px;border-radius:8px;border:1px solid ' + mColor +
           ';background:' + (isTrekActive?mColor:'transparent') +
           ';color:' + (isTrekActive?'#fff':mColor) + ';cursor:pointer;margin-left:4px';
-        trekBtn.onclick = (e) => { e.stopPropagation(); startTrekDraw(i, i+1); };
+        trekBtn.onclick = (e) => { e.stopPropagation(); startTrekDraw(i, i+1, mode); };
         inlineDiv.appendChild(trekBtn);
       }
 
@@ -1304,6 +1305,7 @@ function startTrekEditMode(segIdx) {
 
   trekEditSegIdx = segIdx;
   trekDrawing = true;
+  trekDrawMode = seg.mode || 'trek';  // 区間のmodeを引き継ぐ
   trekPoints = [];
 
   // 起点の座標から開始（fromポイントのlatlngを優先）
@@ -1339,8 +1341,9 @@ function startTrekEditMode(segIdx) {
 
 // ===== フリードロー（登山道トレース）=====
 
-function startTrekDraw(fromIdx, toIdx) {
+function startTrekDraw(fromIdx, toIdx, mode) {
   trekDrawing = true;
+  trekDrawMode = mode || 'trek';  // モードを記録
   trekFromIdx = fromIdx;
   trekToIdx = toIdx;
   trekPoints = [];
@@ -1410,9 +1413,9 @@ function confirmTrekDraw() {
       if (fromLL) trekPoints[0] = [fromLL.lat, fromLL.lng];
       // 終点を末尾に上書き（pushではなく置換）
       if (toLL) trekPoints[trekPoints.length - 1] = [toLL.lat, toLL.lng];
-      // 座標を上書き
+      // 座標を上書き（modeはtrekDrawModeを使って確実に保持）
       seg.coords = [...trekPoints];
-      seg.mode = seg.mode || 'trek';
+      seg.mode = trekDrawMode;
       recalcTrekSegment(seg);
     }
     cancelTrekDraw();
@@ -1434,15 +1437,13 @@ function confirmTrekDraw() {
   const existingSeg = segments.find(s => s.from === fromPt && s.to === toPt);
   if (existingSeg) {
     existingSeg.coords = [...trekPoints];
-    // modeはそのまま維持（trek・walkfree両方対応）
-    existingSeg.mode = existingSeg.mode || 'trek';
+    // trekDrawModeを優先して使用
+    existingSeg.mode = trekDrawMode;
     recalcTrekSegment(existingSeg);
   } else {
     fromPt._trekTo = toPt;
     fromPt._trekCoords = [...trekPoints];
-    // モードを保持（trekFromIdxの区間から判定）
-    const targetSeg = segments.find(s => s.from === fromPt && s.to === toPt);
-    fromPt.mode = targetSeg?.mode || 'trek';
+    fromPt.mode = trekDrawMode;
   }
   cancelTrekDraw();
   renderPointList();
