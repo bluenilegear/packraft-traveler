@@ -157,6 +157,7 @@ header {
 }
 .mode-btn.active-river { background: #1B00FF; border-color: #1B00FF; color: #fff; }
 .mode-btn.active-walk  { background: #00AA22; border-color: #00AA22; color: #fff; }
+.mode-btn.active-walkfree { background: #00AA22; border-color: #00AA22; color: #fff; }
 .mode-btn.active-bike  { background: #FF7800; border-color: #FF7800; color: #fff; }
 .mode-btn.active-bus   { background: #222222; border-color: #222222; color: #fff; }
 .mode-btn.active-train { background: #222222; border-color: #222222; color: #fff; }
@@ -634,12 +635,13 @@ const ROUTE_COLOR = '#ff3333';
 const MODE_CONFIG = {
   river: { label: '川下り', color: '#1B00FF', dashArray: null,   weight: 5 },
   walk:  { label: '徒歩',   color: '#00AA22', dashArray: null,   weight: 4 },
+  walkfree: { label: '野歩き', color: '#00AA22', dashArray: '6,3',  weight: 3 },
   bike:  { label: '自転車', color: '#FF7800', dashArray: null,   weight: 4 },
-  trek:  { label: '登山道', color: '#8B4513', dashArray: null,   weight: 3 },
+  trek:  { label: '登山', color: '#8B4513', dashArray: null,   weight: 3 },
   bus:   { label: 'バス',   color: '#555555', dashArray: '1,10', weight: 4, lineCap: 'round' },
   train: { label: '電車',   color: '#333333', dashArray: '1,10', weight: 4, lineCap: 'round' },
 };
-const MODE_EMOJI = { river: '川', walk: '歩', bike: '輪', trek: '山', bus: 'バス', train: '鉄' };
+const MODE_EMOJI = { river: '川', walk: '歩', bike: '輪', trek: '山', bus: 'バス', train: '鉄', walkfree: '野' };
 
 function gradientColor(permil) {
   return ROUTE_COLOR;
@@ -974,7 +976,7 @@ function renderPointList() {
       inlineDiv.className = 'mode-selector-inline';
 
       // 移動手段ボタン
-      [['river','川'],['walk','歩'],['bike','輪'],['trek','山'],['bus','バス'],['train','鉄']].forEach(([m, emoji]) => {
+      [['river','川'],['walk','歩'],['walkfree','野'],['bike','輪'],['trek','山'],['bus','バス'],['train','鉄']].forEach(([m, emoji]) => {
         const btn = document.createElement('button');
         btn.className = 'mode-btn' + (mode===m?' active-'+m:'');
         btn.textContent = emoji;
@@ -1122,7 +1124,7 @@ renderMapLegend(); // 凡例を初回表示
       // descリーダーライン
       if (pt.desc && pt.desc.trim()) {
         const d = pt.descDir||'auto';
-        let dlat=0.010, dlng=0.010;
+        let dlat=0, dlng=0.012;
         if(d==='top'){dlat=0.012;dlng=0;}else if(d==='bottom'){dlat=-0.012;dlng=0;}
         else if(d==='left'){dlat=0;dlng=-0.012;}else if(d==='right'){dlat=0;dlng=0.012;}
         L.polyline([[pt.lat,pt.lng],[pt.lat+dlat,pt.lng+dlng]],{color:'#555',weight:2,opacity:0.7,dashArray:'4,3',interactive:false}).addTo(map);
@@ -1304,8 +1306,10 @@ function startTrekEditMode(segIdx) {
   trekDrawing = true;
   trekPoints = [];
 
-  // 起点の座標から開始
-  const fromLL = seg.from?.latlng || { lat: seg.coords[0][0], lng: seg.coords[0][1] };
+  // 起点の座標から開始（fromポイントのlatlngを優先）
+  const fromLL = seg.from?.latlng
+    ? { lat: seg.from.latlng.lat, lng: seg.from.latlng.lng }
+    : { lat: seg.coords[0][0], lng: seg.coords[0][1] };
   trekPoints.push([fromLL.lat, fromLL.lng]);
 
   // 区間の色に合わせたプレビュー
@@ -1400,13 +1404,15 @@ function confirmTrekDraw() {
   if (window._trekEditMode && trekEditSegIdx !== null) {
     const seg = segments[trekEditSegIdx];
     if (seg) {
-      // 終点を追加
       const toLL = seg.to?.latlng;
-      if (toLL) trekPoints.push([toLL.lat, toLL.lng]);
+      const fromLL = seg.from?.latlng;
+      // 起点を先頭に確実にセット
+      if (fromLL) trekPoints[0] = [fromLL.lat, fromLL.lng];
+      // 終点を末尾に上書き（pushではなく置換）
+      if (toLL) trekPoints[trekPoints.length - 1] = [toLL.lat, toLL.lng];
       // 座標を上書き
       seg.coords = [...trekPoints];
-      seg.mode = seg.mode || 'river'; // modeはそのまま維持
-      // 標高再計算
+      seg.mode = seg.mode || 'trek';
       recalcTrekSegment(seg);
     }
     cancelTrekDraw();
@@ -1416,17 +1422,23 @@ function confirmTrekDraw() {
   // 通常のtrekトレースモード
   if (points[trekToIdx]?.latlng) {
     const ll = points[trekToIdx].latlng;
-    trekPoints.push([ll.lat, ll.lng]);
+    // 起点を先頭に確実にセット
+    if (points[trekFromIdx]?.latlng) {
+      const fll = points[trekFromIdx].latlng;
+      trekPoints[0] = [fll.lat, fll.lng];
+    }
+    // 最後の点を終点に上書きスナップ（pushしない）
+    trekPoints[trekPoints.length - 1] = [ll.lat, ll.lng];
   }
   const fromPt = points[trekFromIdx], toPt = points[trekToIdx];
   const existingSeg = segments.find(s => s.from === fromPt && s.to === toPt);
   if (existingSeg) {
-    existingSeg.coords = trekPoints;
-    existingSeg.mode = 'trek';
+    existingSeg.coords = [...trekPoints];
+    existingSeg.mode = existingSeg.mode || 'trek';
     recalcTrekSegment(existingSeg);
   } else {
     fromPt._trekTo = toPt;
-    fromPt._trekCoords = trekPoints;
+    fromPt._trekCoords = [...trekPoints];
     fromPt.mode = 'trek';
   }
   cancelTrekDraw();
@@ -1725,6 +1737,16 @@ async function calculate() {
           continue;
         }
         coords = res.coords; totalDist = res.distM;
+      } else if (mode === 'walkfree') {
+        // 野歩き：2点間を直線補間（道なき道）
+        const p1 = from.latlng, p2 = to.latlng;
+        const steps = 20;
+        coords = [];
+        for (let s = 0; s <= steps; s++) {
+          const t = s / steps;
+          coords.push([p1.lat + (p2.lat - p1.lat) * t, p1.lng + (p2.lng - p1.lng) * t]);
+        }
+        totalDist = haversine(p1.lat, p1.lng, p2.lat, p2.lng);
       } else {
         // 徒歩・自転車・バス：OSRM
         const osrmRes = await fetchOSRMRoute(from.latlng, to.latlng, mode);
@@ -3742,7 +3764,7 @@ function buildViewerHTML(encoded) {
     '    else if(dd==="left"){dlat=0;dlng=-0.012;}' +
     '    else if(dd==="right"){dlat=0;dlng=0.012;}' +
     '    else{' + // auto: 接続ラインの方向から判定
-    '      dlat=0.010;dlng=0.010;' +
+    '      dlat=0;dlng=0.012;' +
     '    }' +
     '    const descLL=[pt.lat+dlat,pt.lng+dlng];' +
     // リーダーライン
