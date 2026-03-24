@@ -1239,6 +1239,7 @@ renderMapLegend(); // 凡例を初回表示
 
 // ===== 地図クリック =====
 map.on('click', e => {
+  if (document.documentElement.classList.contains('viewer-mode')) return;
   if (trekDrawing) { addTrekPoint(e.latlng); return; }
   if (activeSlot === null) return;
   const p = points[activeSlot];
