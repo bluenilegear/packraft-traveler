@@ -29,6 +29,10 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+.viewer-mode header,
+.viewer-mode .sidebar { display: none !important; }
+.viewer-mode .main { height: 100vh !important; }
+.viewer-mode #map { height: 100vh !important; }
 body { background: var(--bg); color: var(--text); font-family: var(--sans); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
 header {
@@ -401,6 +405,12 @@ canvas.elev-chart-interactive { width: 100%; display: block; cursor: crosshair; 
   .main { flex-direction: column; }
 }
 </style>
+<script>
+// ページ読み込み直後にhashを確認してviewerモードのCSSクラスを付与
+if(window.location.hash.startsWith('#viewer=')){
+  document.documentElement.classList.add('viewer-mode');
+}
+</script>
 </head>
 <body>
 
