@@ -157,7 +157,7 @@ header {
 }
 .mode-btn.active-river { background: #1B00FF; border-color: #1B00FF; color: #fff; }
 .mode-btn.active-walk  { background: #00AA22; border-color: #00AA22; color: #fff; }
-.mode-btn.active-walkfree { background: #00AA22; border-color: #00AA22; color: #fff; }
+.mode-btn.active-walkfree { background: #FF69B4; border-color: #FF69B4; color: #fff; }
 .mode-btn.active-bike  { background: #FF7800; border-color: #FF7800; color: #fff; }
 .mode-btn.active-bus   { background: #222222; border-color: #222222; color: #fff; }
 .mode-btn.active-train { background: #222222; border-color: #222222; color: #fff; }
@@ -635,7 +635,7 @@ const ROUTE_COLOR = '#ff3333';
 const MODE_CONFIG = {
   river: { label: '川下り', color: '#1B00FF', dashArray: null,   weight: 5 },
   walk:  { label: '徒歩',   color: '#00AA22', dashArray: null,   weight: 4 },
-  walkfree: { label: '野歩き', color: '#00AA22', dashArray: '6,3',  weight: 3 },
+  walkfree: { label: '野歩き', color: '#FF69B4', dashArray: null,   weight: 4 },
   bike:  { label: '自転車', color: '#FF7800', dashArray: null,   weight: 4 },
   trek:  { label: '登山', color: '#8B4513', dashArray: null,   weight: 3 },
   bus:   { label: 'バス',   color: '#555555', dashArray: '1,10', weight: 4, lineCap: 'round' },
@@ -991,7 +991,7 @@ function renderPointList() {
       inlineDiv.appendChild(lbl);
 
       // トレースボタン（trek・trainのみ）
-      if (mode === 'trek' || mode === 'train') {
+      if (mode === 'trek' || mode === 'train' || mode === 'walkfree') {
         const trekBtn = document.createElement('button');
         const isTrekActive = trekDrawing && trekFromIdx === i;
         const mColor = MODE_CONFIG[mode].color;
@@ -1434,12 +1434,15 @@ function confirmTrekDraw() {
   const existingSeg = segments.find(s => s.from === fromPt && s.to === toPt);
   if (existingSeg) {
     existingSeg.coords = [...trekPoints];
+    // modeはそのまま維持（trek・walkfree両方対応）
     existingSeg.mode = existingSeg.mode || 'trek';
     recalcTrekSegment(existingSeg);
   } else {
     fromPt._trekTo = toPt;
     fromPt._trekCoords = [...trekPoints];
-    fromPt.mode = 'trek';
+    // モードを保持（trekFromIdxの区間から判定）
+    const targetSeg = segments.find(s => s.from === fromPt && s.to === toPt);
+    fromPt.mode = targetSeg?.mode || 'trek';
   }
   cancelTrekDraw();
   renderPointList();
@@ -1738,15 +1741,13 @@ async function calculate() {
         }
         coords = res.coords; totalDist = res.distM;
       } else if (mode === 'walkfree') {
-        // 野歩き：2点間を直線補間（道なき道）
-        const p1 = from.latlng, p2 = to.latlng;
-        const steps = 20;
-        coords = [];
-        for (let s = 0; s <= steps; s++) {
-          const t = s / steps;
-          coords.push([p1.lat + (p2.lat - p1.lat) * t, p1.lng + (p2.lng - p1.lng) * t]);
+        // 野歩き：フリードロー専用（trekと同じ処理）
+        const res = await fetchTrekRoute(from, to);
+        if (!res) {
+          segments.push({ from, to, error: '野歩きルートがトレースされていません。区間の間の「✏ トレース開始」を使ってください。', name: `区間${i+1}`, mode });
+          continue;
         }
-        totalDist = haversine(p1.lat, p1.lng, p2.lat, p2.lng);
+        coords = res.coords; totalDist = res.distM;
       } else {
         // 徒歩・自転車・バス：OSRM
         const osrmRes = await fetchOSRMRoute(from.latlng, to.latlng, mode);
@@ -3924,11 +3925,16 @@ function saveCourse() {
       labelDir: s.labelDir || 'auto',
       labelLen: s.labelLen || 2,
       coords: s.coords || [],
-      distKm: s.distKm,
-      elevDiff: s.elevDiff,
-      permil: s.permil,
-      startElev: s.startElev,
-      endElev: s.endElev,
+      distM: s.distM || 0,
+      distKm: s.distKm || 0,
+      elevDiff: s.elevDiff ?? null,
+      permil: s.permil ?? null,
+      startElev: s.startElev ?? null,
+      endElev: s.endElev ?? null,
+      elevPts: s.elevPts || [],
+      stations: s.stations || [],
+      notes: s.notes || '',
+      actualTime: s.actualTime || '',
       error: s.error || null,
     })),
   };
@@ -4001,13 +4007,15 @@ function loadCourse(event) {
         points.push(p);
       });
 
-      // 区間を復元
-      segments = (data.segments || []).map(s => ({
+      // 区間を復元（elevPts・distM等すべて復元）
+      segments = (data.segments || []).map((s, si) => ({
         ...s,
-        from: points[data.segments.indexOf(s)] || null,
-        to: points[data.segments.indexOf(s)+1] || null,
-        elevPts: [],
-        stations: [],
+        from: points[si] || null,
+        to: points[si + 1] || null,
+        elevPts: s.elevPts || [],
+        stations: s.stations || [{name:'',level:''}],
+        distM: s.distM || (s.distKm ? s.distKm * 1000 : 0),
+        distKm: s.distKm || (s.distM ? s.distM / 1000 : 0),
       }));
 
       // ルートを描画
@@ -4037,13 +4045,27 @@ function loadCourse(event) {
         map.fitBounds(L.latLngBounds(validPts), {padding:[60,60]});
       }
 
-      // サマリーを表示
+      // allElevPtsを再構築（断面図・勾配計算用）
       if (segments.some(s=>!s.error&&s.coords)) {
         allElevPts = [];
         let cum = 0;
-        segments.filter(s=>!s.error&&s.elevPts).forEach(seg => {
-          seg.elevPts.forEach(p => allElevPts.push({...p, distFromStart: p.dist+cum}));
-          cum += seg.distM||0;
+        segments.filter(s=>!s.error).forEach(seg => {
+          if (seg.elevPts && seg.elevPts.length > 0) {
+            seg.elevPts.forEach(p => allElevPts.push({
+              ...p,
+              distFromStart: (p.dist || 0) + cum
+            }));
+          } else if (seg.startElev !== null && seg.endElev !== null && seg.coords && seg.coords.length > 1) {
+            // elevPtsがない場合は始点・終点から補間
+            const n = Math.min(seg.coords.length, 20);
+            for (let i = 0; i < n; i++) {
+              const t = i / (n - 1);
+              const elev = seg.startElev + (seg.endElev - seg.startElev) * t;
+              const dist = (seg.distM || 0) * t;
+              allElevPts.push({ elev, dist, distFromStart: dist + cum });
+            }
+          }
+          cum += seg.distM || 0;
         });
         renderSegments();
         renderSummary();
