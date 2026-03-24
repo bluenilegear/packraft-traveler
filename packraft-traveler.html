@@ -697,7 +697,9 @@ function refreshAllMarkers() {
     // リーダーラインの方向を決定
     const dir = getLeaderDir(p, i);
     const LEAD = 36; // リーダーラインの長さ(px)
-    const TEXT_W = Math.max(80, p.desc.length * 7 + 16);
+    // 日本語文字（2バイト）は14px、英数字は8pxで計算
+    const textPx = [...p.desc].reduce((w, ch) => w + (ch.charCodeAt(0) > 127 ? 14 : 8), 0);
+    const TEXT_W = Math.max(80, textPx + 20);
     const TEXT_H = 22;
 
     // 方向ごとのSVGパスとラベル位置を計算
@@ -1112,7 +1114,7 @@ renderMapLegend(); // 凡例を初回表示
         else if(d==='left'){dlat=0;dlng=-0.012;}else if(d==='right'){dlat=0;dlng=0.012;}
         L.polyline([[pt.lat,pt.lng],[pt.lat+dlat,pt.lng+dlng]],{color:'#555',weight:2,opacity:0.7,dashArray:'4,3',interactive:false}).addTo(map);
         const tRight = dlng>=0;
-        const dw = Math.max(80, pt.desc.length*7+16);
+        const dw = Math.max(80, [...pt.desc].reduce((w,ch)=>w+(ch.charCodeAt(0)>127?14:8),0)+20);
         const dHtml = '<div style="pointer-events:none;white-space:nowrap"><div style="background:rgba(255,255,255,0.95);border:1px solid #aaa;border-radius:4px;padding:3px 9px;font-size:11px;font-weight:600;color:#222;box-shadow:0 1px 4px rgba(0,0,0,.15)">'+pt.desc+'</div></div>';
         L.marker([pt.lat+dlat,pt.lng+dlng],{icon:L.divIcon({className:'',html:dHtml,iconSize:[dw,22],iconAnchor:[tRight?0:dw,11]}),interactive:false}).addTo(map);
       }
@@ -3714,7 +3716,7 @@ function buildViewerHTML(encoded) {
     '    L.polyline([[pt.lat,pt.lng],descLL],{color:"#555",weight:2,opacity:0.75,dashArray:"4,3",interactive:false}).addTo(map);' +
     // テキストバッジ
     '    const textOnRight=dlng>=0;' +
-    '    const dw=Math.max(80,pt.desc.length*7+16);' +
+    '    const dw=Math.max(80,[...pt.desc].reduce((w,ch)=>w+(ch.charCodeAt(0)>127?14:8),0)+20);' +
     '    const descHtml=textOnRight' +
     '      ?"<div style=\'pointer-events:none;white-space:nowrap\'><div style=\'background:rgba(255,255,255,0.95);border:1px solid #aaa;border-radius:4px;padding:3px 9px;font-size:11px;font-weight:600;color:#222;box-shadow:0 1px 4px rgba(0,0,0,.15)\'>"+pt.desc+"</div></div>"' +
     '      :"<div style=\'pointer-events:none;white-space:nowrap;text-align:right\'><div style=\'background:rgba(255,255,255,0.95);border:1px solid #aaa;border-radius:4px;padding:3px 9px;font-size:11px;font-weight:600;color:#222;box-shadow:0 1px 4px rgba(0,0,0,.15)\'>"+pt.desc+"</div></div>";' +
