@@ -1021,8 +1021,18 @@ function removePoint(idx) {
   updateModeUI();
 }
 
+
+
+// 初期：2スロット用意
+addPointSlot();
+addPointSlot();
+activeSlot = 0;
+renderPointList();
+updateModeUI();
+renderMapLegend(); // 凡例を初回表示
+
 // ===== 起動時に #viewer= ハッシュがあれば閲覧モードで表示 =====
-document.addEventListener('DOMContentLoaded', function() {
+(function initViewer() {
   const hash = window.location.hash;
   if (!hash.startsWith('#viewer=')) return;
 
@@ -1221,15 +1231,7 @@ document.addEventListener('DOMContentLoaded', function() {
     console.error('閲覧モードエラー:', e);
     alert('データの読み込みに失敗しました: '+e.message);
   }
-});
-
-// 初期：2スロット用意
-addPointSlot();
-addPointSlot();
-activeSlot = 0;
-renderPointList();
-updateModeUI();
-renderMapLegend(); // 凡例を初回表示
+})();
 
 // ===== 地図クリック =====
 map.on('click', e => {
