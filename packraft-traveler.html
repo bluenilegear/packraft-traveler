@@ -6,6 +6,7 @@
 <title>Packraft Traveler</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;700&family=Outfit:wght@400;600;700&family=Share+Tech+Mono&display=swap');
 
@@ -1049,7 +1050,19 @@ renderMapLegend(); // 凡例を初回表示
   // データ復元
   try {
     const encoded = hash.slice('#viewer='.length);
-    const data = JSON.parse(decodeURIComponent(atob(encoded)));
+    let data;
+    if (encoded.startsWith('z:')) {
+      // pako圧縮版をデコード
+      const b64 = encoded.slice(2).replace(/-/g,'+').replace(/_/g,'/');
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const json = pako.inflate(bytes, {to: 'string'});
+      data = JSON.parse(json);
+    } else {
+      // 従来方式（後方互換）
+      data = JSON.parse(decodeURIComponent(atob(encoded)));
+    }
 
     // 色設定を復元
     if (data.modeColors) {
@@ -1797,6 +1810,13 @@ function renderSegments() {
             return '<button onclick="segments['+i+'].labelDir=\''+d+'\';renderModeLabels();event.stopPropagation()" style="font-size:9px;padding:1px 4px;border-radius:3px;border:1px solid '+(active?'var(--primary)':'var(--border)')+';background:'+(active?'var(--primary)':'transparent')+';color:'+(active?'#fff':'var(--muted)')+';cursor:pointer">'+lbl+'</button>';
           }).join('')}
         </div>
+        <div style="display:flex;gap:4px;margin-top:4px;align-items:center">
+          <span style="font-size:9px;color:var(--muted);white-space:nowrap">線の長さ:</span>
+          <input type="range" min="1" max="5" step="1" value="${seg.labelLen||2}"
+            oninput="segments[${i}].labelLen=+this.value;this.nextElementSibling.textContent=(['短','やや短','中','やや長','長'][this.value-1]);renderModeLabels()"
+            style="flex:1;accent-color:var(--primary)"/>
+          <span style="font-size:9px;color:var(--muted);min-width:26px">${['短','やや短','中','やや長','長'][(seg.labelLen||2)-1]}</span>
+        </div>
       </div>
       <div class="seg-body">
         <div class="seg-stats">
@@ -2017,7 +2037,9 @@ function renderModeLabels() {
     // 引出方向を決定（deg: 緯度経度オフセットの方向）
     const dir = seg.labelDir || 'auto';
     let dlat, dlng;
-    const offset = 0.016; // オフセット量（4倍）
+    // オフセット量（labelLen 1〜5 → 0.006〜0.030度）
+    const lenSteps = [0.006, 0.010, 0.016, 0.022, 0.030];
+    const offset = lenSteps[(seg.labelLen || 2) - 1];
 
     if (dir === 'topleft')     { dlat = +offset; dlng = -offset; }
     else if (dir === 'topright')    { dlat = +offset; dlng = +offset; }
@@ -3593,6 +3615,7 @@ function generateViewerLink() {
       mode: s.mode || 'river',
       mapLabel: s.mapLabel || '',
       labelDir: s.labelDir || 'auto',
+      labelLen: s.labelLen || 2,
       coords: s.coords ? s.coords.filter((_,i)=>i % Math.max(1, Math.floor(s.coords.length/200)) === 0) : [],
       distKm: s.distKm,
       elevDiff: s.elevDiff,
@@ -3604,7 +3627,17 @@ function generateViewerLink() {
   };
 
   const json = JSON.stringify(data);
-  const encoded = btoa(encodeURIComponent(json));
+
+  // pako（zlib）で圧縮してURLセーフbase64に変換（約70%短縮）
+  let encoded;
+  try {
+    const compressed = pako.deflate(json, {level: 9});
+    const b64 = btoa(String.fromCharCode(...compressed));
+    encoded = 'z:' + b64.replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+  } catch(e) {
+    // pakoが使えない場合は従来方式にフォールバック
+    encoded = btoa(encodeURIComponent(json));
+  }
 
   // GitHub Pages URL を優先、なければ現在のURLを使用
   const GITHUB_URL = 'https://bluenilegear.github.io/packraft-traveler/packraft-traveler.html';
@@ -3733,7 +3766,7 @@ function buildViewerHTML(encoded) {
     '  const midLL=seg.coords[mid];' +
     // オフセット計算
     '  const d=seg.labelDir||"auto";' +
-    '  const off=0.016;' +
+    '  const off=([0.006,0.010,0.016,0.022,0.030])[(seg.labelLen||2)-1];' +
     '  let dlat=off,dlng=off;' +
     '  if(d==="topleft"){dlat=off;dlng=-off;}' +
     '  else if(d==="bottomleft"){dlat=-off;dlng=-off;}' +
@@ -3867,6 +3900,7 @@ function saveCourse() {
       mode: s.mode || 'river',
       mapLabel: s.mapLabel || '',
       labelDir: s.labelDir || 'auto',
+      labelLen: s.labelLen || 2,
       coords: s.coords || [],
       distKm: s.distKm,
       elevDiff: s.elevDiff,
