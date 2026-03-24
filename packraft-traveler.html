@@ -33,6 +33,8 @@
 .viewer-mode .sidebar { display: none !important; }
 .viewer-mode .main { height: 100vh !important; }
 .viewer-mode #map { height: 100vh !important; }
+/* 閲覧モード：編集用Leafletコントロールを非表示 */
+.viewer-mode .leaflet-bottom.leaflet-left { display: none !important; }
 body { background: var(--bg); color: var(--text); font-family: var(--sans); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
 header {
@@ -1080,8 +1082,8 @@ renderMapLegend(); // 凡例を初回表示
     // 断面図パネル
     const cp = document.createElement('div');
     cp.id = 'vChartPanel';
-    cp.style.cssText = 'position:fixed;bottom:20px;left:180px;right:360px;z-index:1500;background:#fff;border:2px solid #1a5a8a;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.2);display:none;overflow:hidden;min-width:280px';
-    cp.innerHTML = '<div style="background:#1a5a8a;color:#fff;padding:7px 12px;font-size:12px;font-weight:700">断面図</div><canvas id="vChartCanvas" style="width:100%;height:160px;display:block;padding:8px"></canvas>';
+    cp.style.cssText = 'position:fixed;bottom:20px;left:12px;right:12px;max-width:900px;margin:0 auto;z-index:1500;background:#fff;border:2px solid #1a5a8a;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.2);display:none;overflow:hidden';
+    cp.innerHTML = '<div style="background:#1a5a8a;color:#fff;padding:7px 12px;font-size:12px;font-weight:700">断面図</div><canvas id="vChartCanvas" style="width:100%;height:200px;display:block;padding:8px"></canvas>';
     document.body.appendChild(cp);
 
     // ポイントを地図に追加
@@ -1178,7 +1180,9 @@ renderMapLegend(); // 凡例を初回表示
     setTimeout(()=>{
       const cvs=document.getElementById('vChartCanvas');
       if(!cvs)return;
-      cvs.width=cvs.offsetWidth||500;cvs.height=160;
+      const rect=cvs.getBoundingClientRect();
+      cvs.width=rect.width||cvs.offsetWidth||800;
+      cvs.height=200;
       const ctx2=cvs.getContext('2d');
       const pad={top:12,bottom:24,left:38,right:8};
       const cW2=cvs.width-pad.left-pad.right,cH2=cvs.height-pad.top-pad.bottom;
