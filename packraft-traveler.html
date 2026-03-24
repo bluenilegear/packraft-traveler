@@ -1012,7 +1012,7 @@ function removePoint(idx) {
 }
 
 // ===== 起動時に #viewer= ハッシュがあれば閲覧モードで表示 =====
-(function() {
+document.addEventListener('DOMContentLoaded', function() {
   const hash = window.location.hash;
   if (!hash.startsWith('#viewer=')) return;
 
@@ -1211,7 +1211,7 @@ function removePoint(idx) {
     console.error('閲覧モードエラー:', e);
     alert('データの読み込みに失敗しました: '+e.message);
   }
-})();
+});
 
 // 初期：2スロット用意
 addPointSlot();
