@@ -1012,7 +1012,39 @@ function renderPointList() {
         inlineDiv.appendChild(trekBtn);
       }
 
+      // 通過点ボタン（徒歩・野歩き・自転車・バス）
+      if (['walk','walkfree','bike','bus'].includes(mode)) {
+        // 通過点追加ボタン
+        const wpBtn = document.createElement('button');
+        const isWpActive = waypointAddMode && waypointSegIdx === i;
+        wpBtn.id = 'wpBtn_pt_' + i;
+        wpBtn.textContent = isWpActive ? '📍 クリックで追加中...' : '📍 通過点';
+        wpBtn.style.cssText = 'font-size:10px;padding:2px 8px;border-radius:8px;border:1px solid #1a5a8a;' +
+          'background:' + (isWpActive?'#1a5a8a':'transparent') + ';' +
+          'color:' + (isWpActive?'#fff':'#1a5a8a') + ';cursor:pointer;margin-left:4px';
+        wpBtn.onclick = (e) => { e.stopPropagation(); startWaypointAdd(i); };
+        inlineDiv.appendChild(wpBtn);
+      }
+
       connector.appendChild(inlineDiv);
+
+      // 通過点リスト（設定済みの場合のみ表示）
+      const segForWp = segments[i];
+      if (['walk','walkfree','bike','bus'].includes(mode) && segForWp?.waypoints?.length > 0) {
+        const wpListDiv = document.createElement('div');
+        wpListDiv.style.cssText = 'padding:2px 8px 4px 16px;';
+        wpListDiv.id = 'wpList_pt_' + i;
+        (segForWp.waypoints || []).forEach((wp, wi) => {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);padding:1px 0';
+          row.innerHTML = '<div style="width:8px;height:8px;border-radius:50%;background:#1a5a8a;flex-shrink:0"></div>' +
+            '<span style="flex:1">通過点' + (wi+1) + '　' + wp.lat.toFixed(4) + ', ' + wp.lng.toFixed(4) + '</span>' +
+            '<button onclick="removeWaypoint(' + i + ',' + wi + ');renderPointList()" ' +
+            'style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px;padding:0">✕</button>';
+          wpListDiv.appendChild(row);
+        });
+        connector.appendChild(wpListDiv);
+      }
       const line2 = document.createElement('div'); line2.className = 'mode-connector-line';
       connector.appendChild(line2);
       list.appendChild(connector);
@@ -4153,7 +4185,6 @@ let waypointMarkers = {}; // segIdx -> [markers]
 
 function startWaypointAdd(segIdx) {
   if (waypointAddMode && waypointSegIdx === segIdx) {
-    // 同じボタンを押したらキャンセル
     stopWaypointAdd();
     return;
   }
@@ -4161,20 +4192,25 @@ function startWaypointAdd(segIdx) {
   waypointAddMode = true;
   waypointSegIdx = segIdx;
   map.getContainer().style.cursor = 'crosshair';
+  // 区間タブのボタン
   const btn = document.getElementById(`wpBtn_${segIdx}`);
   if (btn) { btn.classList.add('active'); btn.textContent = '✓ 地図をクリックして追加 / もう一度押してキャンセル'; }
+  // ポイントタブのボタン
+  const btnPt = document.getElementById(`wpBtn_pt_${segIdx}`);
+  if (btnPt) { btnPt.style.background='#1a5a8a'; btnPt.style.color='#fff'; btnPt.textContent='📍 クリックで追加中...'; }
 }
 
 function stopWaypointAdd() {
   waypointAddMode = false;
   waypointSegIdx = null;
   map.getContainer().style.cursor = '';
-  // ボタンを戻す
+  // 区間タブのボタン
   document.querySelectorAll('.waypoint-add.active').forEach(btn => {
-    const idx = btn.id.replace('wpBtn_','');
     btn.classList.remove('active');
     btn.textContent = '＋ 通過点を追加（地図クリック）';
   });
+  // ポイントタブのボタン（全リフレッシュ）
+  renderPointList();
 }
 
 function addWaypoint(latlng) {
@@ -4197,6 +4233,7 @@ function addWaypoint(latlng) {
   waypointMarkers[segIdx].push(marker);
 
   renderWaypointList(segIdx);
+  renderPointList(); // ポイントタブのリストも更新
 }
 
 function removeWaypoint(segIdx, wpIdx) {
