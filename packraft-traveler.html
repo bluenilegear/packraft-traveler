@@ -699,6 +699,7 @@ function makePointIcon(p, idx, total) {
 let waypointAddMode = false;
 let waypointSegIdx = null;
 let waypointMarkers = {}; // segIdx -> [markers]
+let pendingWaypoints = {}; // 計測前の通過点を一時保存 segIdx -> [{lat,lng}]
 
 function startWaypointAdd(segIdx) {
   if (waypointAddMode && waypointSegIdx === segIdx) {
@@ -732,12 +733,24 @@ function stopWaypointAdd() {
 
 function addWaypoint(latlng) {
   const segIdx = waypointSegIdx;
-  const seg = segments[segIdx];
-  if (!seg) return;
-  if (!seg.waypoints) seg.waypoints = [];
 
-  const wpIdx = seg.waypoints.length;
-  seg.waypoints.push({ lat: latlng.lat, lng: latlng.lng });
+  // 計測前はpendingWaypointsに保存、計測後はsegmentsに保存
+  if (!pendingWaypoints[segIdx]) pendingWaypoints[segIdx] = [];
+  const seg = segments[segIdx];
+  if (seg) {
+    if (!seg.waypoints) seg.waypoints = [];
+  } else {
+    // 計測前：pendingWaypointsに保存
+  }
+
+  const wpIdx = (seg ? seg.waypoints : pendingWaypoints[segIdx]).length;
+  const wpData = { lat: latlng.lat, lng: latlng.lng };
+
+  if (seg) {
+    seg.waypoints.push(wpData);
+  } else {
+    pendingWaypoints[segIdx].push(wpData);
+  }
 
   // 地図にマーカーを追加
   if (!waypointMarkers[segIdx]) waypointMarkers[segIdx] = [];
@@ -750,20 +763,22 @@ function addWaypoint(latlng) {
   waypointMarkers[segIdx].push(marker);
 
   renderWaypointList(segIdx);
-  renderPointList(); // ポイントタブのリストも更新
+  renderPointList();
 }
 
 function removeWaypoint(segIdx, wpIdx) {
   const seg = segments[segIdx];
-  if (!seg || !seg.waypoints) return;
-  seg.waypoints.splice(wpIdx, 1);
+  const wps = seg ? (seg.waypoints || []) : (pendingWaypoints[segIdx] || []);
+  if (!wps.length) return;
+  wps.splice(wpIdx, 1);
+  if (!seg) pendingWaypoints[segIdx] = wps;
 
   // マーカー再構築
   if (waypointMarkers[segIdx]) {
     waypointMarkers[segIdx].forEach(m => map.removeLayer(m));
     waypointMarkers[segIdx] = [];
   }
-  seg.waypoints.forEach((wp, i) => {
+  wps.forEach((wp, i) => {
     const marker = L.circleMarker([wp.lat, wp.lng], {
       radius: 7, color: '#1a5a8a', weight: 2.5,
       fillColor: '#fff', fillOpacity: 1, interactive: true
@@ -772,14 +787,17 @@ function removeWaypoint(segIdx, wpIdx) {
     waypointMarkers[segIdx].push(marker);
   });
   renderWaypointList(segIdx);
+  renderPointList();
 }
 
 function renderWaypointList(segIdx) {
   const seg = segments[segIdx];
   const list = document.getElementById(`waypoints_${segIdx}`);
-  if (!list || !seg) return;
+  if (!list) return;
+  // 計測前はpendingWaypoints、計測後はseg.waypointsを使用
+  const wps = seg ? (seg.waypoints || []) : (pendingWaypoints[segIdx] || []);
   list.innerHTML = '';
-  (seg.waypoints || []).forEach((wp, i) => {
+  wps.forEach((wp, i) => {
     const row = document.createElement('div');
     row.className = 'waypoint-row';
     row.innerHTML = `<div class="waypoint-dot"></div>
@@ -1143,11 +1161,13 @@ function renderPointList() {
 
       // 通過点リスト（設定済みの場合のみ表示）
       const segForWp = segments[i];
-      if (['walk','walkfree','bike','bus'].includes(mode) && segForWp?.waypoints?.length > 0) {
+      const wpsForList = segForWp?.waypoints?.length ? segForWp.waypoints
+                       : pendingWaypoints[i]?.length ? pendingWaypoints[i] : [];
+      if (['walk','walkfree','bike','bus'].includes(mode) && wpsForList.length > 0) {
         const wpListDiv = document.createElement('div');
         wpListDiv.style.cssText = 'padding:2px 8px 4px 16px;';
         wpListDiv.id = 'wpList_pt_' + i;
-        (segForWp.waypoints || []).forEach((wp, wi) => {
+        wpsForList.forEach((wp, wi) => {
           const row = document.createElement('div');
           row.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);padding:1px 0';
           row.innerHTML = '<div style="width:8px;height:8px;border-radius:50%;background:#1a5a8a;flex-shrink:0"></div>' +
@@ -1908,7 +1928,11 @@ async function calculate() {
         coords = res.coords; totalDist = res.distM;
       } else {
         // 徒歩・自転車・バス：OSRM（通過点対応）
-        const waypoints = (seg.waypoints || []).map(w => ({lat: w.lat, lng: w.lng}));
+        // pendingWaypointsがあればsegに引き継ぐ
+        if (!seg.waypoints && pendingWaypoints[i] && pendingWaypoints[i].length) {
+          seg.waypoints = [...pendingWaypoints[i]];
+        }
+        const waypoints = (seg.waypoints || pendingWaypoints[i] || []).map(w => ({lat: w.lat, lng: w.lng}));
         const osrmRes = await fetchOSRMRoute(from.latlng, to.latlng, mode, waypoints);
         if (!osrmRes) {
           segments.push({ from, to, error: 'ルートが見つかりません', name: `区間${i+1}`, mode });
