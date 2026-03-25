@@ -2581,58 +2581,63 @@ function drawInteractiveChartWithCursor(ci) {
 let gradMeasurePending = null;  // 始点待ち {dist, elev, ci}
 let gradMeasurePairs = [];      // 確定済みペア [{a, b}]
 
+function updateGradStatus(msg) {
+  ['gradMeasureStatus','gradMeasureStatusModal'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = msg;
+  });
+}
+
 function addGradMeasurePoint(dist, elev, ci) {
   if (!gradMeasurePending) {
-    // 始点をセット
     gradMeasurePending = { dist, elev, ci };
-    const statusEl = document.getElementById('gradMeasureStatus');
-    if (statusEl) statusEl.textContent = `始点: ${(dist/1000).toFixed(2)}km / ${elev.toFixed(0)}m → 終点をクリック`;
+    updateGradStatus(`始点: ${(dist/1000).toFixed(2)}km / ${elev.toFixed(0)}m → 終点をクリック`);
   } else {
-    // 終点をセット → ペア確定
     const a = gradMeasurePending;
     const b = { dist, elev, ci };
-    // 始点が終点より右なら入れ替え
     const from = a.dist <= b.dist ? a : b;
     const to   = a.dist <= b.dist ? b : a;
     gradMeasurePairs.push({ from, to });
     gradMeasurePending = null;
-    const statusEl = document.getElementById('gradMeasureStatus');
-    if (statusEl) statusEl.textContent = `グラフをクリックして始点を指定`;
+    updateGradStatus('グラフをクリックして始点を指定');
     renderGradMeasureList();
     drawInteractiveChart();
+    drawModalChart();
   }
 }
 
 function resetGradMeasure() {
   gradMeasurePending = null;
   gradMeasurePairs = [];
-  const statusEl = document.getElementById('gradMeasureStatus');
-  if (statusEl) statusEl.textContent = 'グラフをクリックして始点を指定';
-  const list = document.getElementById('gradMeasureList');
-  if (list) list.innerHTML = '';
+  updateGradStatus('グラフをクリックして始点を指定');
+  renderGradMeasureList();
   drawInteractiveChart();
+  drawModalChart();
 }
 
 function renderGradMeasureList() {
-  const list = document.getElementById('gradMeasureList');
-  if (!list) return;
-  list.innerHTML = '';
-  gradMeasurePairs.forEach((pair, i) => {
-    const distKm = (pair.to.dist - pair.from.dist) / 1000;
-    const elevDiff = pair.to.elev - pair.from.elev;
-    const permil = distKm > 0 ? (elevDiff / (pair.to.dist - pair.from.dist) * 1000) : 0;
-    const sign = permil >= 0 ? '+' : '';
-    const color = permil > 15 ? '#e74c3c' : permil > 5 ? '#f39c12' : permil < -15 ? '#2980b9' : '#27ae60';
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0;border-bottom:1px solid var(--border)';
-    row.innerHTML =
-      `<span style="color:var(--muted);min-width:14px">${i+1}.</span>` +
-      `<span style="color:var(--muted)">${(pair.from.dist/1000).toFixed(2)}km → ${(pair.to.dist/1000).toFixed(2)}km</span>` +
-      `<span style="color:var(--muted)">${distKm.toFixed(2)}km</span>` +
-      `<span style="font-weight:700;color:${color}">${sign}${permil.toFixed(1)}‰</span>` +
-      `<span style="color:var(--muted)">${elevDiff>=0?'+':''}${elevDiff.toFixed(0)}m</span>` +
-      `<button onclick="removeGradPair(${i})" style="margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px">✕</button>`;
-    list.appendChild(row);
+  // 通常断面図とモーダル両方を更新
+  ['gradMeasureList', 'gradMeasureListModal'].forEach(id => {
+    const list = document.getElementById(id);
+    if (!list) return;
+    list.innerHTML = '';
+    gradMeasurePairs.forEach((pair, i) => {
+      const distKm = (pair.to.dist - pair.from.dist) / 1000;
+      const elevDiff = pair.to.elev - pair.from.elev;
+      const permil = distKm > 0 ? (elevDiff / (pair.to.dist - pair.from.dist) * 1000) : 0;
+      const sign = permil >= 0 ? '+' : '';
+      const color = permil > 15 ? '#e74c3c' : permil > 5 ? '#f39c12' : permil < -15 ? '#2980b9' : '#27ae60';
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0;border-bottom:1px solid var(--border)';
+      row.innerHTML =
+        `<span style="color:var(--muted);min-width:14px">${i+1}.</span>` +
+        `<span style="color:var(--muted)">${(pair.from.dist/1000).toFixed(2)}km → ${(pair.to.dist/1000).toFixed(2)}km</span>` +
+        `<span style="color:var(--muted)">${distKm.toFixed(2)}km</span>` +
+        `<span style="font-weight:700;color:${color}">${sign}${permil.toFixed(1)}‰</span>` +
+        `<span style="color:var(--muted)">${elevDiff>=0?'+':''}${elevDiff.toFixed(0)}m</span>` +
+        `<button onclick="removeGradPair(${i})" style="margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px">✕</button>`;
+      list.appendChild(row);
+    });
   });
 }
 
@@ -3110,6 +3115,68 @@ function drawModalChart(cursorIdx = null) {
     ctx.fillStyle = ROUTE_COLOR; ctx.fill();
   }
 
+  // ===== 勾配計測マーカー（モーダル） =====
+  gradMeasurePairs.forEach((pair) => {
+    const x1 = xOf(pair.from.dist), x2 = xOf(pair.to.dist);
+    const y1 = yOf(pair.from.elev),  y2 = yOf(pair.to.elev);
+    const distM = pair.to.dist - pair.from.dist;
+    const elevDiff = pair.to.elev - pair.from.elev;
+    const permil = distM > 0 ? (elevDiff / distM * 1000) : 0;
+    const sign = permil >= 0 ? '+' : '';
+    const pColor = permil > 15 ? '#e74c3c' : permil > 5 ? '#f39c12' : permil < -15 ? '#2980b9' : '#27ae60';
+
+    ctx.save();
+    // 縦破線
+    ctx.strokeStyle = pColor; ctx.lineWidth = 2; ctx.setLineDash([5,4]);
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath(); ctx.moveTo(x1, pad.top); ctx.lineTo(x1, H - pad.bottom); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x2, pad.top); ctx.lineTo(x2, H - pad.bottom); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+
+    // 水平矢印線
+    const midY = Math.min(y1, y2) - 16;
+    ctx.strokeStyle = pColor; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x1, midY); ctx.lineTo(x2, midY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x1, midY-5); ctx.lineTo(x1, midY+5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x2, midY-5); ctx.lineTo(x2, midY+5); ctx.stroke();
+
+    // 勾配ラベル
+    const midX = (x1 + x2) / 2;
+    const distKm = (pair.to.dist - pair.from.dist) / 1000;
+    const label = `${sign}${permil.toFixed(1)}‰  ${distKm.toFixed(2)}km  ${elevDiff>=0?'+':''}${elevDiff.toFixed(0)}m`;
+    ctx.font = 'bold 13px sans-serif';
+    const tw = ctx.measureText(label).width + 12;
+    ctx.fillStyle = pColor;
+    if (ctx.roundRect) ctx.roundRect(midX - tw/2, midY - 26, tw, 20, 5);
+    else ctx.rect(midX - tw/2, midY - 26, tw, 20);
+    ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+    ctx.fillText(label, midX, midY - 12);
+    ctx.textAlign = 'left';
+
+    // マーカー丸
+    [[x1, pair.from.elev], [x2, pair.to.elev]].forEach(([x, e]) => {
+      ctx.beginPath(); ctx.arc(x, yOf(e), 6, 0, Math.PI*2);
+      ctx.fillStyle = pColor; ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    });
+    ctx.restore();
+  });
+
+  // 始点待ちマーカー
+  if (gradMeasurePending) {
+    const x = xOf(gradMeasurePending.dist), y = yOf(gradMeasurePending.elev);
+    ctx.save();
+    ctx.strokeStyle = '#1a5a8a'; ctx.lineWidth = 2; ctx.setLineDash([5,4]);
+    ctx.globalAlpha = 0.7;
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, H - pad.bottom); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI*2);
+    ctx.fillStyle = '#1a5a8a'; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+  }
+
   // ===== ホバーイベント（モーダル用） =====
   canvas.onmousemove = function(e) {
     const rect = canvas.getBoundingClientRect();
@@ -3136,6 +3203,18 @@ function drawModalChart(cursorIdx = null) {
     document.getElementById('modalCursorRow').style.display = 'none';
     drawModalChart();
     if (hoverMarker) { map.removeLayer(hoverMarker); hoverMarker = null; }
+  };
+
+  // 勾配計測クリック（モーダル）
+  canvas.onclick = function(e) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const ci = Math.max(0, Math.min(n - 1,
+      Math.round((mx - pad.left) / cW * (n - 1))
+    ));
+    const pt = pts[ci];
+    addGradMeasurePoint(pt.distFromStart, pt.elev, ci);
+    drawModalChart();
   };
 }
 
@@ -4677,6 +4756,13 @@ function resetAll() {
       <span id="mc-grad" style="color:var(--accent)">—</span>
     </div>
     <canvas id="chart_modal_canvas" height="280"></canvas>
+    <!-- 勾配計測UI -->
+    <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+      <span style="font-size:10px;color:var(--muted)">📐 勾配計測：</span>
+      <span id="gradMeasureStatusModal" style="font-size:10px;color:#1a5a8a;font-weight:600">グラフをクリックして始点を指定</span>
+      <button onclick="resetGradMeasure()" style="font-size:10px;padding:2px 8px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;margin-left:auto">リセット</button>
+    </div>
+    <div id="gradMeasureListModal" style="margin-top:2px"></div>
     <div style="font-size:10px;color:var(--muted);margin-top:8px;line-height:1.6;border-top:1px solid var(--border);padding-top:6px;">
       ※ 標高データに平滑化処理を適用済み（移動中央値・単調性補正・加重移動平均）。実際の地形と若干異なる場合あり。
     </div>
