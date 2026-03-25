@@ -505,6 +505,12 @@ if(window.location.hash.startsWith('#viewer=')){
             <div class="tt-elev" id="tt-elev">—</div>
           </div>
         </div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:4px;flex-wrap:wrap">
+          <span style="font-size:10px;color:var(--muted)">📐 勾配計測：</span>
+          <span id="gradMeasureStatus" style="font-size:10px;color:#1a5a8a;font-weight:600">グラフをクリックして始点を指定</span>
+          <button onclick="resetGradMeasure()" style="font-size:10px;padding:2px 8px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;margin-left:auto">リセット</button>
+        </div>
+        <div id="gradMeasureList" style="margin-top:2px"></div>
         <div style="font-size:9px;color:var(--muted);margin-top:6px;line-height:1.6;border-top:1px solid var(--border);padding-top:6px;">
           ※ 標高データに平滑化処理を適用済み（異常値除去・加重平均）。実際の地形と若干異なる場合あり。
         </div>
@@ -1928,11 +1934,8 @@ async function calculate() {
         coords = res.coords; totalDist = res.distM;
       } else {
         // 徒歩・自転車・バス：OSRM（通過点対応）
-        // pendingWaypointsがあればsegに引き継ぐ
-        if (!seg.waypoints && pendingWaypoints[i] && pendingWaypoints[i].length) {
-          seg.waypoints = [...pendingWaypoints[i]];
-        }
-        const waypoints = (seg.waypoints || pendingWaypoints[i] || []).map(w => ({lat: w.lat, lng: w.lng}));
+        // pendingWaypointsを取得（計測前に設定した通過点）
+        const waypoints = (pendingWaypoints[i] || []).map(w => ({lat: w.lat, lng: w.lng}));
         const osrmRes = await fetchOSRMRoute(from.latlng, to.latlng, mode, waypoints);
         if (!osrmRes) {
           segments.push({ from, to, error: 'ルートが見つかりません', name: `区間${i+1}`, mode });
@@ -1954,6 +1957,7 @@ async function calculate() {
         from, to, coords, elevPts: valid, mode,
         distM: totalDist, distKm: totalDist/1000,
         startElev, endElev, elevDiff, permil, snapWarn,
+        waypoints: pendingWaypoints[i] || [],
         color: cfg.color,
         actualTime:'', stations:[{name:'',level:''}], notes:'', error:null
       });
@@ -2533,6 +2537,16 @@ function drawInteractiveChart() {
     if (hoverMarker) { map.removeLayer(hoverMarker); hoverMarker = null; }
     drawInteractiveChart(); // 十字線消す
   };
+
+  // 勾配計測クリック
+  canvas.onclick = function(e) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const idx = Math.round((mx - pad.left) / (W - pad.left - pad.right) * (n - 1));
+    const ci = Math.max(0, Math.min(n - 1, idx));
+    const pt = pts[ci];
+    addGradMeasurePoint(pt.distFromStart, pt.elev, ci);
+  };
 }
 
 function drawInteractiveChartWithCursor(ci) {
@@ -2563,6 +2577,71 @@ function drawInteractiveChartWithCursor(ci) {
 }
 
 // チャートの基本描画部分を関数化（再描画用）
+// ===== 断面図 勾配計測 =====
+let gradMeasurePending = null;  // 始点待ち {dist, elev, ci}
+let gradMeasurePairs = [];      // 確定済みペア [{a, b}]
+
+function addGradMeasurePoint(dist, elev, ci) {
+  if (!gradMeasurePending) {
+    // 始点をセット
+    gradMeasurePending = { dist, elev, ci };
+    const statusEl = document.getElementById('gradMeasureStatus');
+    if (statusEl) statusEl.textContent = `始点: ${(dist/1000).toFixed(2)}km / ${elev.toFixed(0)}m → 終点をクリック`;
+  } else {
+    // 終点をセット → ペア確定
+    const a = gradMeasurePending;
+    const b = { dist, elev, ci };
+    // 始点が終点より右なら入れ替え
+    const from = a.dist <= b.dist ? a : b;
+    const to   = a.dist <= b.dist ? b : a;
+    gradMeasurePairs.push({ from, to });
+    gradMeasurePending = null;
+    const statusEl = document.getElementById('gradMeasureStatus');
+    if (statusEl) statusEl.textContent = `グラフをクリックして始点を指定`;
+    renderGradMeasureList();
+    drawInteractiveChart();
+  }
+}
+
+function resetGradMeasure() {
+  gradMeasurePending = null;
+  gradMeasurePairs = [];
+  const statusEl = document.getElementById('gradMeasureStatus');
+  if (statusEl) statusEl.textContent = 'グラフをクリックして始点を指定';
+  const list = document.getElementById('gradMeasureList');
+  if (list) list.innerHTML = '';
+  drawInteractiveChart();
+}
+
+function renderGradMeasureList() {
+  const list = document.getElementById('gradMeasureList');
+  if (!list) return;
+  list.innerHTML = '';
+  gradMeasurePairs.forEach((pair, i) => {
+    const distKm = (pair.to.dist - pair.from.dist) / 1000;
+    const elevDiff = pair.to.elev - pair.from.elev;
+    const permil = distKm > 0 ? (elevDiff / (pair.to.dist - pair.from.dist) * 1000) : 0;
+    const sign = permil >= 0 ? '+' : '';
+    const color = permil > 15 ? '#e74c3c' : permil > 5 ? '#f39c12' : permil < -15 ? '#2980b9' : '#27ae60';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 0;border-bottom:1px solid var(--border)';
+    row.innerHTML =
+      `<span style="color:var(--muted);min-width:14px">${i+1}.</span>` +
+      `<span style="color:var(--muted)">${(pair.from.dist/1000).toFixed(2)}km → ${(pair.to.dist/1000).toFixed(2)}km</span>` +
+      `<span style="color:var(--muted)">${distKm.toFixed(2)}km</span>` +
+      `<span style="font-weight:700;color:${color}">${sign}${permil.toFixed(1)}‰</span>` +
+      `<span style="color:var(--muted)">${elevDiff>=0?'+':''}${elevDiff.toFixed(0)}m</span>` +
+      `<button onclick="removeGradPair(${i})" style="margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px">✕</button>`;
+    list.appendChild(row);
+  });
+}
+
+function removeGradPair(idx) {
+  gradMeasurePairs.splice(idx, 1);
+  renderGradMeasureList();
+  drawInteractiveChart();
+}
+
 function drawInteractiveChart_base(canvas) {
   if (!canvas || allElevPts.length < 2) return;
   const W = canvas.width, H = canvas.height;
@@ -2945,6 +3024,75 @@ function drawModalChart(cursorIdx = null) {
       ctx.fillText(emoji, x, ay);
       ctx.restore();
     });
+  }
+
+  // ===== 勾配計測マーカーを描画 =====
+  const totalDist2 = pts[pts.length-1].distFromStart;
+  const xOfDist = d => pad.left + (d / totalDist2) * (W - pad.left - pad.right);
+
+  // 確定済みペアを描画
+  gradMeasurePairs.forEach((pair, pi) => {
+    const x1 = xOfDist(pair.from.dist);
+    const x2 = xOfDist(pair.to.dist);
+    const y1 = yOf(pair.from.elev);
+    const y2 = yOf(pair.to.elev);
+    const distKm = (pair.to.dist - pair.from.dist) / 1000;
+    const elevDiff = pair.to.elev - pair.from.elev;
+    const permil = distKm > 0 ? (elevDiff / (pair.to.dist - pair.from.dist) * 1000) : 0;
+    const sign = permil >= 0 ? '+' : '';
+    const pColor = permil > 15 ? '#e74c3c' : permil > 5 ? '#f39c12' : permil < -15 ? '#2980b9' : '#27ae60';
+
+    ctx.save();
+    // 縦線（始点・終点）
+    ctx.strokeStyle = pColor; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
+    ctx.globalAlpha = 0.7;
+    ctx.beginPath(); ctx.moveTo(x1, pad.top); ctx.lineTo(x1, H - pad.bottom); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x2, pad.top); ctx.lineTo(x2, H - pad.bottom); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+
+    // 水平矢印線
+    const midY = Math.min(y1, y2) - 12;
+    ctx.strokeStyle = pColor; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(x1, midY); ctx.lineTo(x2, midY); ctx.stroke();
+    // 矢印頭
+    ctx.beginPath(); ctx.moveTo(x1, midY-4); ctx.lineTo(x1, midY+4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x2, midY-4); ctx.lineTo(x2, midY+4); ctx.stroke();
+
+    // 勾配ラベル（中央）
+    const midX = (x1 + x2) / 2;
+    const label = `${sign}${permil.toFixed(1)}‰`;
+    ctx.font = 'bold 11px sans-serif';
+    const tw = ctx.measureText(label).width + 8;
+    ctx.fillStyle = pColor;
+    if (ctx.roundRect) ctx.roundRect(midX - tw/2, midY - 22, tw, 16, 4);
+    else ctx.rect(midX - tw/2, midY - 22, tw, 16);
+    ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+    ctx.fillText(label, midX, midY - 11);
+    ctx.textAlign = 'left';
+
+    // マーカー丸
+    [x1, x2].forEach(x => {
+      ctx.beginPath(); ctx.arc(x, yOf(x === x1 ? pair.from.elev : pair.to.elev), 5, 0, Math.PI*2);
+      ctx.fillStyle = pColor; ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    });
+    ctx.restore();
+  });
+
+  // 待機中の始点マーカー
+  if (gradMeasurePending) {
+    const x = xOfDist(gradMeasurePending.dist);
+    const y = yOf(gradMeasurePending.elev);
+    ctx.save();
+    ctx.strokeStyle = '#1a5a8a'; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
+    ctx.globalAlpha = 0.6;
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, H - pad.bottom); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI*2);
+    ctx.fillStyle = '#1a5a8a'; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.restore();
   }
 
   // ===== カーソル十字線 =====
