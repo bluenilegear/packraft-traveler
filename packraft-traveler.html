@@ -695,6 +695,119 @@ function makePointIcon(p, idx, total) {
 }
 
 // 全マーカーのアイコンを現在のtotalに合わせて更新
+// ===== 通過点（Waypoint）管理 =====
+let waypointAddMode = false;
+let waypointSegIdx = null;
+let waypointMarkers = {}; // segIdx -> [markers]
+
+function startWaypointAdd(segIdx) {
+  if (waypointAddMode && waypointSegIdx === segIdx) {
+    stopWaypointAdd();
+    return;
+  }
+  stopWaypointAdd();
+  waypointAddMode = true;
+  waypointSegIdx = segIdx;
+  map.getContainer().style.cursor = 'crosshair';
+  // 区間タブのボタン
+  const btn = document.getElementById(`wpBtn_${segIdx}`);
+  if (btn) { btn.classList.add('active'); btn.textContent = '✓ 地図をクリックして追加 / もう一度押してキャンセル'; }
+  // ポイントタブのボタン
+  const btnPt = document.getElementById(`wpBtn_pt_${segIdx}`);
+  if (btnPt) { btnPt.style.background='#1a5a8a'; btnPt.style.color='#fff'; btnPt.textContent='📍 クリックで追加中...'; }
+}
+
+function stopWaypointAdd() {
+  waypointAddMode = false;
+  waypointSegIdx = null;
+  map.getContainer().style.cursor = '';
+  // 区間タブのボタン
+  document.querySelectorAll('.waypoint-add.active').forEach(btn => {
+    btn.classList.remove('active');
+    btn.textContent = '＋ 通過点を追加（地図クリック）';
+  });
+  // ポイントタブのボタン（全リフレッシュ）
+  renderPointList();
+}
+
+function addWaypoint(latlng) {
+  const segIdx = waypointSegIdx;
+  const seg = segments[segIdx];
+  if (!seg) return;
+  if (!seg.waypoints) seg.waypoints = [];
+
+  const wpIdx = seg.waypoints.length;
+  seg.waypoints.push({ lat: latlng.lat, lng: latlng.lng });
+
+  // 地図にマーカーを追加
+  if (!waypointMarkers[segIdx]) waypointMarkers[segIdx] = [];
+  const marker = L.circleMarker(latlng, {
+    radius: 7, color: '#1a5a8a', weight: 2.5,
+    fillColor: '#fff', fillOpacity: 1, interactive: true
+  }).addTo(map).bindTooltip(`通過点${wpIdx+1}（クリックで削除）`, {direction:'top'});
+
+  marker.on('click', () => removeWaypoint(segIdx, wpIdx));
+  waypointMarkers[segIdx].push(marker);
+
+  renderWaypointList(segIdx);
+  renderPointList(); // ポイントタブのリストも更新
+}
+
+function removeWaypoint(segIdx, wpIdx) {
+  const seg = segments[segIdx];
+  if (!seg || !seg.waypoints) return;
+  seg.waypoints.splice(wpIdx, 1);
+
+  // マーカー再構築
+  if (waypointMarkers[segIdx]) {
+    waypointMarkers[segIdx].forEach(m => map.removeLayer(m));
+    waypointMarkers[segIdx] = [];
+  }
+  seg.waypoints.forEach((wp, i) => {
+    const marker = L.circleMarker([wp.lat, wp.lng], {
+      radius: 7, color: '#1a5a8a', weight: 2.5,
+      fillColor: '#fff', fillOpacity: 1, interactive: true
+    }).addTo(map).bindTooltip(`通過点${i+1}（クリックで削除）`, {direction:'top'});
+    marker.on('click', () => removeWaypoint(segIdx, i));
+    waypointMarkers[segIdx].push(marker);
+  });
+  renderWaypointList(segIdx);
+}
+
+function renderWaypointList(segIdx) {
+  const seg = segments[segIdx];
+  const list = document.getElementById(`waypoints_${segIdx}`);
+  if (!list || !seg) return;
+  list.innerHTML = '';
+  (seg.waypoints || []).forEach((wp, i) => {
+    const row = document.createElement('div');
+    row.className = 'waypoint-row';
+    row.innerHTML = `<div class="waypoint-dot"></div>
+      <span class="waypoint-label">通過点${i+1}　${wp.lat.toFixed(5)}, ${wp.lng.toFixed(5)}</span>
+      <button onclick="removeWaypoint(${segIdx},${i})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px" title="削除">✕</button>`;
+    list.appendChild(row);
+  });
+}
+
+function restoreWaypointMarkers() {
+  segments.forEach((seg, segIdx) => {
+    if (!seg.waypoints || !seg.waypoints.length) return;
+    if (!waypointMarkers[segIdx]) waypointMarkers[segIdx] = [];
+    waypointMarkers[segIdx].forEach(m => map.removeLayer(m));
+    waypointMarkers[segIdx] = [];
+    seg.waypoints.forEach((wp, i) => {
+      const marker = L.circleMarker([wp.lat, wp.lng], {
+        radius: 7, color: '#1a5a8a', weight: 2.5,
+        fillColor: '#fff', fillOpacity: 1, interactive: true
+      }).addTo(map).bindTooltip(`通過点${i+1}（クリックで削除）`, {direction:'top'});
+      marker.on('click', () => removeWaypoint(segIdx, i));
+      waypointMarkers[segIdx].push(marker);
+    });
+  });
+}
+
+
+
 function refreshAllMarkers() {
   const total = points.length;
   points.forEach((p, i) => {
@@ -4176,117 +4289,6 @@ function loadCourse(event) {
   };
   reader.readAsText(file);
   event.target.value = ''; // 同じファイルを再読み込み可能にする
-}
-
-// ===== 通過点（Waypoint）管理 =====
-let waypointAddMode = false;
-let waypointSegIdx = null;
-let waypointMarkers = {}; // segIdx -> [markers]
-
-function startWaypointAdd(segIdx) {
-  if (waypointAddMode && waypointSegIdx === segIdx) {
-    stopWaypointAdd();
-    return;
-  }
-  stopWaypointAdd();
-  waypointAddMode = true;
-  waypointSegIdx = segIdx;
-  map.getContainer().style.cursor = 'crosshair';
-  // 区間タブのボタン
-  const btn = document.getElementById(`wpBtn_${segIdx}`);
-  if (btn) { btn.classList.add('active'); btn.textContent = '✓ 地図をクリックして追加 / もう一度押してキャンセル'; }
-  // ポイントタブのボタン
-  const btnPt = document.getElementById(`wpBtn_pt_${segIdx}`);
-  if (btnPt) { btnPt.style.background='#1a5a8a'; btnPt.style.color='#fff'; btnPt.textContent='📍 クリックで追加中...'; }
-}
-
-function stopWaypointAdd() {
-  waypointAddMode = false;
-  waypointSegIdx = null;
-  map.getContainer().style.cursor = '';
-  // 区間タブのボタン
-  document.querySelectorAll('.waypoint-add.active').forEach(btn => {
-    btn.classList.remove('active');
-    btn.textContent = '＋ 通過点を追加（地図クリック）';
-  });
-  // ポイントタブのボタン（全リフレッシュ）
-  renderPointList();
-}
-
-function addWaypoint(latlng) {
-  const segIdx = waypointSegIdx;
-  const seg = segments[segIdx];
-  if (!seg) return;
-  if (!seg.waypoints) seg.waypoints = [];
-
-  const wpIdx = seg.waypoints.length;
-  seg.waypoints.push({ lat: latlng.lat, lng: latlng.lng });
-
-  // 地図にマーカーを追加
-  if (!waypointMarkers[segIdx]) waypointMarkers[segIdx] = [];
-  const marker = L.circleMarker(latlng, {
-    radius: 7, color: '#1a5a8a', weight: 2.5,
-    fillColor: '#fff', fillOpacity: 1, interactive: true
-  }).addTo(map).bindTooltip(`通過点${wpIdx+1}（クリックで削除）`, {direction:'top'});
-
-  marker.on('click', () => removeWaypoint(segIdx, wpIdx));
-  waypointMarkers[segIdx].push(marker);
-
-  renderWaypointList(segIdx);
-  renderPointList(); // ポイントタブのリストも更新
-}
-
-function removeWaypoint(segIdx, wpIdx) {
-  const seg = segments[segIdx];
-  if (!seg || !seg.waypoints) return;
-  seg.waypoints.splice(wpIdx, 1);
-
-  // マーカー再構築
-  if (waypointMarkers[segIdx]) {
-    waypointMarkers[segIdx].forEach(m => map.removeLayer(m));
-    waypointMarkers[segIdx] = [];
-  }
-  seg.waypoints.forEach((wp, i) => {
-    const marker = L.circleMarker([wp.lat, wp.lng], {
-      radius: 7, color: '#1a5a8a', weight: 2.5,
-      fillColor: '#fff', fillOpacity: 1, interactive: true
-    }).addTo(map).bindTooltip(`通過点${i+1}（クリックで削除）`, {direction:'top'});
-    marker.on('click', () => removeWaypoint(segIdx, i));
-    waypointMarkers[segIdx].push(marker);
-  });
-  renderWaypointList(segIdx);
-}
-
-function renderWaypointList(segIdx) {
-  const seg = segments[segIdx];
-  const list = document.getElementById(`waypoints_${segIdx}`);
-  if (!list || !seg) return;
-  list.innerHTML = '';
-  (seg.waypoints || []).forEach((wp, i) => {
-    const row = document.createElement('div');
-    row.className = 'waypoint-row';
-    row.innerHTML = `<div class="waypoint-dot"></div>
-      <span class="waypoint-label">通過点${i+1}　${wp.lat.toFixed(5)}, ${wp.lng.toFixed(5)}</span>
-      <button onclick="removeWaypoint(${segIdx},${i})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px" title="削除">✕</button>`;
-    list.appendChild(row);
-  });
-}
-
-function restoreWaypointMarkers() {
-  segments.forEach((seg, segIdx) => {
-    if (!seg.waypoints || !seg.waypoints.length) return;
-    if (!waypointMarkers[segIdx]) waypointMarkers[segIdx] = [];
-    waypointMarkers[segIdx].forEach(m => map.removeLayer(m));
-    waypointMarkers[segIdx] = [];
-    seg.waypoints.forEach((wp, i) => {
-      const marker = L.circleMarker([wp.lat, wp.lng], {
-        radius: 7, color: '#1a5a8a', weight: 2.5,
-        fillColor: '#fff', fillOpacity: 1, interactive: true
-      }).addTo(map).bindTooltip(`通過点${i+1}（クリックで削除）`, {direction:'top'});
-      marker.on('click', () => removeWaypoint(segIdx, i));
-      waypointMarkers[segIdx].push(marker);
-    });
-  });
 }
 
 function copyMapLink() {
