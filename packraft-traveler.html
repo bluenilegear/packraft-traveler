@@ -251,6 +251,14 @@ header {
 .station-del:hover { color: var(--red); }
 .station-add { background: transparent; border: 1px dashed var(--border); border-radius: 5px; color: var(--muted); font-size: 11px; padding: 4px 8px; cursor: pointer; width: 100%; font-family: var(--sans); transition: all .15s; }
 .station-add:hover { border-color: var(--river); color: var(--river-light); }
+.waypoint-add { background: transparent; border: 1px dashed #1a5a8a; border-radius: 5px; color: #1a5a8a; font-size: 11px; padding: 4px 8px; cursor: pointer; width: 100%; font-family: var(--sans); transition: all .15s; margin-top: 4px; }
+.waypoint-add:hover { background: #e8f0f8; }
+.waypoint-add.active { background: #1a5a8a; color: #fff; }
+.waypoint-list { margin: 4px 0; }
+.waypoint-row { display: flex; align-items: center; gap: 4px; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
+.waypoint-row:last-child { border-bottom: none; }
+.waypoint-dot { width: 10px; height: 10px; border-radius: 50%; background: #1a5a8a; flex-shrink: 0; }
+.waypoint-label { flex: 1; color: var(--muted); }
 .station-header { display: grid; grid-template-columns: 1.4fr 0.8fr 20px; gap: 5px; font-size: 9px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; margin-bottom: 2px; padding: 0 2px; }
 
 /* 全体サマリー */
@@ -1259,6 +1267,7 @@ renderMapLegend(); // 凡例を初回表示
 map.on('click', e => {
   if (document.documentElement.classList.contains('viewer-mode')) return;
   if (trekDrawing) { addTrekPoint(e.latlng); return; }
+  if (waypointAddMode) { addWaypoint(e.latlng); return; }
   if (activeSlot === null) return;
   const p = points[activeSlot];
   if (!p) return;
@@ -1659,10 +1668,13 @@ function smoothElevations(pts) {
 }
 
 // ===== 移動手段別設定 =====
-// OSRM徒歩・自転車ルーティング
-async function fetchOSRMRoute(from, to, mode) {
+// OSRM徒歩・自転車ルーティング（通過点対応）
+async function fetchOSRMRoute(from, to, mode, waypoints=[]) {
   const profile = mode === 'bike' ? 'bike' : 'foot';
-  const url = `https://router.project-osrm.org/route/v1/${profile}/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson`;
+  // 全座標を結合（from → waypoints → to）
+  const allPts = [from, ...waypoints, to];
+  const coordStr = allPts.map(p => `${p.lng},${p.lat}`).join(';');
+  const url = `https://router.project-osrm.org/route/v1/${profile}/${coordStr}?overview=full&geometries=geojson`;
   const res = await fetch(url);
   const data = await res.json();
   if (!data.routes || !data.routes.length) return null;
@@ -1750,8 +1762,9 @@ async function calculate() {
         }
         coords = res.coords; totalDist = res.distM;
       } else {
-        // 徒歩・自転車・バス：OSRM
-        const osrmRes = await fetchOSRMRoute(from.latlng, to.latlng, mode);
+        // 徒歩・自転車・バス：OSRM（通過点対応）
+        const waypoints = (seg.waypoints || []).map(w => ({lat: w.lat, lng: w.lng}));
+        const osrmRes = await fetchOSRMRoute(from.latlng, to.latlng, mode, waypoints);
         if (!osrmRes) {
           segments.push({ from, to, error: 'ルートが見つかりません', name: `区間${i+1}`, mode });
           continue;
@@ -1867,6 +1880,12 @@ function renderSegments() {
         </div>
         ${seg.elevPts.length>1?`<canvas class="elev-chart" id="chart_${i}" height="80"></canvas>`:''}
         ${seg.snapWarn?'<div style="font-size:10px;color:var(--yellow);margin-top:6px">⚠ 起点または終点から川まで距離があります</div>':''}
+        ${['walk','walkfree','bike','bus'].includes(seg.mode)?`
+        <div class="actual-section">
+          <div class="actual-label">📍 通過点（経由地・勾配区切り）</div>
+          <div class="waypoint-list" id="waypoints_${i}"></div>
+          <button class="waypoint-add" id="wpBtn_${i}" onclick="startWaypointAdd(${i})">＋ 通過点を追加（地図クリック）</button>
+        </div>`:''}
         <div class="actual-section">
           <div class="actual-label">実績データ</div>
           <div class="actual-grid">
@@ -1893,6 +1912,9 @@ function renderSegments() {
 
     // 観測所リストを描画
     renderStations(i);
+
+    // 通過点リストを描画
+    renderWaypointList(i);
 
     if(seg.elevPts.length>1){
       setTimeout(()=>drawElevChart(`chart_${i}`,seg.elevPts),100);
@@ -2656,8 +2678,46 @@ function drawModalChart(cursorIdx = null) {
       labelPoints.push({ dist, label: lbl, color: col, isCamp: pt.type==='camp' });
     });
 
+    // 通過点を断面図に描画（薄い縦線）
+    let wpCumDist = 0;
+    segments.filter(s=>!s.error).forEach((seg, si) => {
+      if (seg.waypoints && seg.waypoints.length > 0 && seg.coords && seg.coords.length > 1) {
+        seg.waypoints.forEach((wp, wi) => {
+          // 通過点の距離を補間計算
+          let minDist = Infinity, wpDist = wpCumDist;
+          seg.coords.forEach((c, ci) => {
+            const d = Math.sqrt((c[0]-wp.lat)**2 + (c[1]-wp.lng)**2);
+            if (d < minDist) {
+              minDist = d;
+              let distToHere = wpCumDist;
+              for (let k = 0; k < ci; k++) {
+                distToHere += haversine(seg.coords[k][0], seg.coords[k][1], seg.coords[k+1][0], seg.coords[k+1][1]);
+              }
+              wpDist = distToHere;
+            }
+          });
+          const x = xOf(wpDist);
+          if (x >= pad.left && x <= W - pad.right) {
+            ctx.save();
+            ctx.strokeStyle = '#1a5a8a';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            ctx.globalAlpha = 0.5;
+            ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, H - pad.bottom); ctx.stroke();
+            ctx.setLineDash([]); ctx.globalAlpha = 1;
+            // 通過点ラベル
+            ctx.fillStyle = '#1a5a8a';
+            ctx.font = '9px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(`経由${si+1}-${wi+1}`, x, pad.top + 10);
+            ctx.restore();
+          }
+        });
+      }
+      wpCumDist += seg.distM || 0;
+    });
+
     labelPoints.forEach(lp => {
-      const x = xOf(lp.dist);
       // 右端に来ても必ず描画
       if (x < pad.left - 10) return;
       const xClamped = Math.min(Math.max(x, pad.left + 2), W - pad.right - 2);
@@ -3932,6 +3992,7 @@ function saveCourse() {
       permil: s.permil ?? null,
       startElev: s.startElev ?? null,
       endElev: s.endElev ?? null,
+      waypoints: s.waypoints || [],
       elevPts: s.elevPts || [],
       stations: s.stations || [],
       notes: s.notes || '',
@@ -4013,7 +4074,8 @@ function loadCourse(event) {
         ...s,
         from: points[si] || null,
         to: points[si + 1] || null,
-        elevPts: s.elevPts || [],
+        waypoints: s.waypoints || [],
+      elevPts: s.elevPts || [],
         stations: s.stations || [{name:'',level:''}],
         distM: s.distM || (s.distKm ? s.distKm * 1000 : 0),
         distKm: s.distKm || (s.distM ? s.distM / 1000 : 0),
@@ -4072,6 +4134,7 @@ function loadCourse(event) {
         renderSummary();
       }
 
+      restoreWaypointMarkers();
       setStatus('✅ コースを読み込みました：' + getCourseTitle(), false);
       switchTab('points');
     } catch(err) {
@@ -4081,6 +4144,112 @@ function loadCourse(event) {
   };
   reader.readAsText(file);
   event.target.value = ''; // 同じファイルを再読み込み可能にする
+}
+
+// ===== 通過点（Waypoint）管理 =====
+let waypointAddMode = false;
+let waypointSegIdx = null;
+let waypointMarkers = {}; // segIdx -> [markers]
+
+function startWaypointAdd(segIdx) {
+  if (waypointAddMode && waypointSegIdx === segIdx) {
+    // 同じボタンを押したらキャンセル
+    stopWaypointAdd();
+    return;
+  }
+  stopWaypointAdd();
+  waypointAddMode = true;
+  waypointSegIdx = segIdx;
+  map.getContainer().style.cursor = 'crosshair';
+  const btn = document.getElementById(`wpBtn_${segIdx}`);
+  if (btn) { btn.classList.add('active'); btn.textContent = '✓ 地図をクリックして追加 / もう一度押してキャンセル'; }
+}
+
+function stopWaypointAdd() {
+  waypointAddMode = false;
+  waypointSegIdx = null;
+  map.getContainer().style.cursor = '';
+  // ボタンを戻す
+  document.querySelectorAll('.waypoint-add.active').forEach(btn => {
+    const idx = btn.id.replace('wpBtn_','');
+    btn.classList.remove('active');
+    btn.textContent = '＋ 通過点を追加（地図クリック）';
+  });
+}
+
+function addWaypoint(latlng) {
+  const segIdx = waypointSegIdx;
+  const seg = segments[segIdx];
+  if (!seg) return;
+  if (!seg.waypoints) seg.waypoints = [];
+
+  const wpIdx = seg.waypoints.length;
+  seg.waypoints.push({ lat: latlng.lat, lng: latlng.lng });
+
+  // 地図にマーカーを追加
+  if (!waypointMarkers[segIdx]) waypointMarkers[segIdx] = [];
+  const marker = L.circleMarker(latlng, {
+    radius: 7, color: '#1a5a8a', weight: 2.5,
+    fillColor: '#fff', fillOpacity: 1, interactive: true
+  }).addTo(map).bindTooltip(`通過点${wpIdx+1}（クリックで削除）`, {direction:'top'});
+
+  marker.on('click', () => removeWaypoint(segIdx, wpIdx));
+  waypointMarkers[segIdx].push(marker);
+
+  renderWaypointList(segIdx);
+}
+
+function removeWaypoint(segIdx, wpIdx) {
+  const seg = segments[segIdx];
+  if (!seg || !seg.waypoints) return;
+  seg.waypoints.splice(wpIdx, 1);
+
+  // マーカー再構築
+  if (waypointMarkers[segIdx]) {
+    waypointMarkers[segIdx].forEach(m => map.removeLayer(m));
+    waypointMarkers[segIdx] = [];
+  }
+  seg.waypoints.forEach((wp, i) => {
+    const marker = L.circleMarker([wp.lat, wp.lng], {
+      radius: 7, color: '#1a5a8a', weight: 2.5,
+      fillColor: '#fff', fillOpacity: 1, interactive: true
+    }).addTo(map).bindTooltip(`通過点${i+1}（クリックで削除）`, {direction:'top'});
+    marker.on('click', () => removeWaypoint(segIdx, i));
+    waypointMarkers[segIdx].push(marker);
+  });
+  renderWaypointList(segIdx);
+}
+
+function renderWaypointList(segIdx) {
+  const seg = segments[segIdx];
+  const list = document.getElementById(`waypoints_${segIdx}`);
+  if (!list || !seg) return;
+  list.innerHTML = '';
+  (seg.waypoints || []).forEach((wp, i) => {
+    const row = document.createElement('div');
+    row.className = 'waypoint-row';
+    row.innerHTML = `<div class="waypoint-dot"></div>
+      <span class="waypoint-label">通過点${i+1}　${wp.lat.toFixed(5)}, ${wp.lng.toFixed(5)}</span>
+      <button onclick="removeWaypoint(${segIdx},${i})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px" title="削除">✕</button>`;
+    list.appendChild(row);
+  });
+}
+
+function restoreWaypointMarkers() {
+  segments.forEach((seg, segIdx) => {
+    if (!seg.waypoints || !seg.waypoints.length) return;
+    if (!waypointMarkers[segIdx]) waypointMarkers[segIdx] = [];
+    waypointMarkers[segIdx].forEach(m => map.removeLayer(m));
+    waypointMarkers[segIdx] = [];
+    seg.waypoints.forEach((wp, i) => {
+      const marker = L.circleMarker([wp.lat, wp.lng], {
+        radius: 7, color: '#1a5a8a', weight: 2.5,
+        fillColor: '#fff', fillOpacity: 1, interactive: true
+      }).addTo(map).bindTooltip(`通過点${i+1}（クリックで削除）`, {direction:'top'});
+      marker.on('click', () => removeWaypoint(segIdx, i));
+      waypointMarkers[segIdx].push(marker);
+    });
+  });
 }
 
 function copyMapLink() {
