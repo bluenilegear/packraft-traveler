@@ -3204,19 +3204,31 @@ function drawModalChart(cursorIdx = null) {
     drawModalChart();
     if (hoverMarker) { map.removeLayer(hoverMarker); hoverMarker = null; }
   };
+}
 
-  // 勾配計測クリック（モーダル）
-  canvas.onclick = function(e) {
+// モーダル断面図の勾配計測クリックは一度だけ登録
+(function setupModalChartClick() {
+  // openChartModal後にcanvasが存在するタイミングで登録
+  document.addEventListener('click', function(e) {
+    const canvas = document.getElementById('chart_modal_canvas');
+    if (!canvas || e.target !== canvas) return;
+    if (allElevPts.length < 2) return;
+    const pts = allElevPts;
+    const n = pts.length;
+    const W = canvas.width, H = canvas.height;
+    const pad = { top: 20, bottom: 60, left: 54, right: 20 };
+    const cW = W - pad.left - pad.right;
     const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const mx = (e.clientX - rect.left) * (W / rect.width);
     const ci = Math.max(0, Math.min(n - 1,
       Math.round((mx - pad.left) / cW * (n - 1))
     ));
     const pt = pts[ci];
     addGradMeasurePoint(pt.distFromStart, pt.elev, ci);
     drawModalChart();
-  };
-}
+    e.stopPropagation(); // closeChartModalが発火しないようにする
+  });
+})();
 
 // ===== 出力機能 =====
 
