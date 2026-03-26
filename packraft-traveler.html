@@ -1386,22 +1386,24 @@ renderMapLegend(); // 凡例を初回表示
       let cumD=0;
       data.segments.forEach(seg=>{
         if(!seg.coords||seg.startElev==null)return;
+        const segDist = seg.distM || (seg.distKm ? seg.distKm*1000 : 0);
         if(seg.elevPts&&seg.elevPts.length>1){
           seg.elevPts.forEach(p=>{
-            const dist = (p.dist||0);
-            const elev = p.elev;
-            if(elev==null||isNaN(elev)) return; // 無効データをスキップ
-            pts.push({distFromStart:cumD+dist,elev:elev,mode:seg.mode||'river'});
+            // distFromStart（絶対距離）かdist（相対距離）どちらでも対応
+            const d = p.distFromStart != null ? p.distFromStart
+                    : p.dist != null ? cumD + p.dist
+                    : null;
+            if(d == null || p.elev == null || isNaN(p.elev)) return;
+            pts.push({distFromStart: d, elev: p.elev, mode: seg.mode||'river'});
           });
         } else {
-          const n2=seg.coords.length;
-          const segDist = seg.distM || (seg.distKm ? seg.distKm*1000 : 0);
+          const n2 = seg.coords.length;
           for(let i=0;i<n2;i++){
-            const e=seg.startElev+(seg.endElev-seg.startElev)*(i/(n2-1||1));
-            pts.push({distFromStart:cumD+segDist*i/(n2-1||1),elev:e,mode:seg.mode||'river'});
+            const e = seg.startElev + (seg.endElev - seg.startElev) * (i / (n2-1||1));
+            pts.push({distFromStart: cumD + segDist * i / (n2-1||1), elev: e, mode: seg.mode||'river'});
           }
         }
-        cumD+=(seg.distM||seg.distKm*1000||0);
+        cumD += segDist;
       });
       if(pts.length<2)return;
 
