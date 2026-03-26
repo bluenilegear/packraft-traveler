@@ -1307,7 +1307,7 @@ renderMapLegend(); // 凡例を初回表示
         let dlat=0, dlng=0.012;
         if(d==='top'){dlat=0.012;dlng=0;}else if(d==='bottom'){dlat=-0.012;dlng=0;}
         else if(d==='left'){dlat=0;dlng=-0.012;}else if(d==='right'){dlat=0;dlng=0.012;}
-        L.polyline([[pt.lat,pt.lng],[pt.lat+dlat,pt.lng+dlng]],{color:'#555',weight:2,opacity:0.7,dashArray:'4,3',interactive:false}).addTo(map);
+        L.polyline([[pt.lat,pt.lng],[pt.lat+dlat,pt.lng+dlng]],{color:'#555',weight:2,opacity:0.7,dashArray:'3,6',interactive:false}).addTo(map);
         const tRight = dlng>=0;
         const dw = Math.max(80, [...pt.desc].reduce((w,ch)=>w+(ch.charCodeAt(0)>127?14:8),0)+20);
         const dHtml = '<div style="pointer-events:none;white-space:nowrap"><div style="background:rgba(255,255,255,0.95);border:1px solid #aaa;border-radius:4px;padding:3px 9px;font-size:11px;font-weight:600;color:#222;box-shadow:0 1px 4px rgba(0,0,0,.15)">'+pt.desc+'</div></div>';
@@ -1331,7 +1331,7 @@ renderMapLegend(); // 凡例を初回表示
         let dlat=off,dlng=off;
         if(d==='topleft'){dlng=-off;}else if(d==='bottomleft'){dlat=-off;dlng=-off;}else if(d==='bottomright'){dlat=-off;}
         const iLL=[mLL[0]+dlat,mLL[1]+dlng];
-        L.polyline([mLL,iLL],{color:cfg.color,weight:2,opacity:0.8,dashArray:'5,4',interactive:false}).addTo(map);
+        L.polyline([mLL,iLL],{color:cfg.color,weight:2,opacity:0.8,dashArray:'3,6',interactive:false}).addTo(map);
         const em=MODE_EMOJI[seg.mode]||'';
         const tRight=dlng>=0;
         const noteHtml = tRight
@@ -1373,56 +1373,137 @@ renderMapLegend(); // 凡例を初回表示
       ].map(([k,v])=>'<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #eee;font-size:12px"><span>'+k+'</span><span style="font-family:monospace;font-weight:700;color:#1a2a3a">'+v+'</span></div>').join('')+
       '</div>';
 
-    // 断面図
+    // 断面図（出力と同等の本格描画）
     setTimeout(()=>{
       const cvs=document.getElementById('vChartCanvas');
       if(!cvs)return;
-      const rect=cvs.getBoundingClientRect();
-      cvs.width=rect.width||cvs.offsetWidth||800;
-      cvs.height=200;
-      const ctx2=cvs.getContext('2d');
-      const pad={top:12,bottom:24,left:38,right:8};
-      const cW2=cvs.width-pad.left-pad.right,cH2=cvs.height-pad.top-pad.bottom;
-      const pts2=[];let cumD=0;
+      const W=cvs.offsetWidth||800, H=260;
+      cvs.width=W; cvs.height=H;
+      const ctx=cvs.getContext('2d');
+
+      // elevPtsが保存されていればそれを使用、なければ補間
+      const pts=[];
+      let cumD=0;
       data.segments.forEach(seg=>{
         if(!seg.coords||seg.startElev==null)return;
-        const n=seg.coords.length;
-        for(let i=0;i<n;i++){
-          const e=seg.startElev+(seg.endElev-seg.startElev)*(i/(n-1||1));
-          pts2.push({d:cumD+seg.distKm*i/(n-1||1),e,mode:seg.mode||'river'});
+        if(seg.elevPts&&seg.elevPts.length>1){
+          seg.elevPts.forEach(p=>pts.push({distFromStart:cumD+p.dist,elev:p.elev,mode:seg.mode||'river'}));
+        } else {
+          const n2=seg.coords.length;
+          for(let i=0;i<n2;i++){
+            const e=seg.startElev+(seg.endElev-seg.startElev)*(i/(n2-1||1));
+            pts.push({distFromStart:cumD+seg.distM*i/(n2-1||1),elev:e,mode:seg.mode||'river'});
+          }
         }
-        cumD+=seg.distKm;
+        cumD+=seg.distM||0;
       });
-      if(!pts2.length)return;
-      const maxD2=pts2[pts2.length-1].d;
-      const minE2=Math.min(...pts2.map(p=>p.e)),maxE2=Math.max(...pts2.map(p=>p.e));
-      const xOf2=d=>pad.left+d/maxD2*cW2;
-      const yOf2=e=>pad.top+(1-(e-minE2)/(maxE2-minE2||1))*cH2;
-      ctx2.fillStyle='#f4f6fa';ctx2.fillRect(0,0,cvs.width,cvs.height);
-      // グリッド
-      ctx2.strokeStyle='rgba(0,0,0,0.06)';ctx2.lineWidth=1;
-      for(let i=0;i<=4;i++){const y=pad.top+i*cH2/4;ctx2.beginPath();ctx2.moveTo(pad.left,y);ctx2.lineTo(cvs.width-pad.right,y);ctx2.stroke();}
-      // セグメントごとに描画
-      let si2=0;
+      if(pts.length<2)return;
+
+      const n=pts.length;
+      const elevs=pts.map(p=>p.elev);
+      const minE=Math.floor(Math.min(...elevs)/10)*10;
+      const maxE=Math.ceil(Math.max(...elevs)/10)*10;
+      const totalDist=pts[n-1].distFromStart;
+      const pad={top:24,bottom:44,left:50,right:16};
+      const cW=W-pad.left-pad.right, cH=H-pad.top-pad.bottom;
+      const xOf=d=>pad.left+(d/totalDist)*cW;
+      const yOf=e=>pad.top+(1-(e-minE)/(maxE-minE||1))*cH;
+      const xOfI=i=>xOf(pts[i].distFromStart);
+
+      // 背景
+      ctx.fillStyle='#f4f8fc'; ctx.fillRect(0,0,W,H);
+
+      // グリッド横線＋標高目盛り
+      const eRange=maxE-minE, eStep=eRange<=50?10:eRange<=200?50:100;
+      ctx.strokeStyle='rgba(0,0,0,0.07)'; ctx.lineWidth=1;
+      ctx.fillStyle='#888'; ctx.font='11px sans-serif'; ctx.textAlign='right';
+      for(let e=Math.ceil(minE/eStep)*eStep;e<=maxE;e+=eStep){
+        const y=yOf(e);
+        ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(W-pad.right,y); ctx.stroke();
+        ctx.fillText(e+'m',pad.left-4,y+4);
+      }
+
+      // 距離グリッド＋目盛り
+      const kmStep=totalDist<=5000?1000:totalDist<=20000?5000:10000;
+      ctx.fillStyle='#888'; ctx.font='11px sans-serif'; ctx.textAlign='center';
+      for(let d=0;d<=totalDist;d+=kmStep){
+        const x=xOf(d);
+        ctx.strokeStyle='rgba(0,0,0,0.07)'; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(x,pad.top); ctx.lineTo(x,H-pad.bottom); ctx.stroke();
+        ctx.fillStyle='#888';
+        ctx.fillText((d/1000).toFixed(0)+'km',x,H-pad.bottom+16);
+      }
+
+      // 塗りつぶし（赤系グラデ・出力と同じ）
+      ctx.beginPath();
+      ctx.moveTo(xOfI(0),yOf(pts[0].elev));
+      for(let i=1;i<n;i++) ctx.lineTo(xOfI(i),yOf(pts[i].elev));
+      ctx.lineTo(xOfI(n-1),H-pad.bottom);
+      ctx.lineTo(xOfI(0),H-pad.bottom);
+      ctx.closePath();
+      const grd=ctx.createLinearGradient(0,pad.top,0,H-pad.bottom);
+      grd.addColorStop(0,'rgba(220,38,38,0.22)');
+      grd.addColorStop(1,'rgba(220,38,38,0.02)');
+      ctx.fillStyle=grd; ctx.fill();
+
+      // セグメントごとにルート線を描画（移動手段の色）
+      let si=0;
       data.segments.forEach(seg=>{
         if(!seg.coords||seg.startElev==null)return;
-        const cfg=MODE_CONFIG[seg.mode||'river']||MODE_CONFIG.river;
-        const n=seg.coords.length;
-        ctx2.beginPath();
-        for(let i=0;i<n;i++){
-          const p=pts2[si2+i];if(!p)continue;
-          i===0?ctx2.moveTo(xOf2(p.d),yOf2(p.e)):ctx2.lineTo(xOf2(p.d),yOf2(p.e));
+        const cfg=(window.MODE_CONFIG&&MODE_CONFIG[seg.mode||'river'])||{color:'#1B00FF'};
+        const segPtCount=seg.elevPts&&seg.elevPts.length>1?seg.elevPts.length:seg.coords.length;
+        ctx.beginPath();
+        for(let i=0;i<segPtCount;i++){
+          const p=pts[si+i]; if(!p) continue;
+          i===0?ctx.moveTo(xOf(p.distFromStart),yOf(p.elev)):ctx.lineTo(xOf(p.distFromStart),yOf(p.elev));
         }
-        ctx2.strokeStyle=cfg.color;ctx2.lineWidth=2;ctx2.stroke();
-        si2+=n;
+        ctx.strokeStyle=cfg.color; ctx.lineWidth=2.5; ctx.lineJoin='round'; ctx.stroke();
+        si+=segPtCount;
       });
+
+      // ポイントマーカー（Start/Goal/中間）＋ラベル
+      let cumD2=0;
+      const ptColors=['#27ae60',...data.points.slice(1,-1).map(()=>'#f59e0b'),'#e74c3c'];
+      data.points.forEach((pt,pi)=>{
+        if(pi>0) cumD2+=(data.segments[pi-1]?.distM||0);
+        if(pi>=data.points.length-1) cumD2=totalDist;
+        const x=xOf(cumD2);
+        const closestPt=pts.reduce((best,p)=>Math.abs(p.distFromStart-cumD2)<Math.abs(best.distFromStart-cumD2)?p:best,pts[0]);
+        const y=yOf(closestPt.elev);
+        // 縦破線
+        ctx.strokeStyle=ptColors[pi]||'#f59e0b'; ctx.lineWidth=1; ctx.setLineDash([4,3]);
+        ctx.globalAlpha=0.4;
+        ctx.beginPath(); ctx.moveTo(x,pad.top); ctx.lineTo(x,H-pad.bottom); ctx.stroke();
+        ctx.setLineDash([]); ctx.globalAlpha=1;
+        // 丸マーカー
+        ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2);
+        ctx.fillStyle=ptColors[pi]||'#f59e0b'; ctx.fill();
+        ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+        // ラベルバッジ
+        const lbl=pi===0?'Start':pi===data.points.length-1?'Goal':'P'+pi;
+        ctx.font='bold 10px sans-serif'; ctx.textAlign='center';
+        const lw=ctx.measureText(lbl).width+10;
+        const lx=Math.min(Math.max(x-lw/2,pad.left+2),W-pad.right-lw-2);
+        ctx.fillStyle=ptColors[pi]||'#f59e0b';
+        ctx.beginPath();
+        if(ctx.roundRect) ctx.roundRect(lx,y-22,lw,16,4);
+        else ctx.rect(lx,y-22,lw,16);
+        ctx.fill();
+        ctx.fillStyle='#fff';
+        ctx.fillText(lbl,x,y-11);
+      });
+
       // 軸ラベル
-      ctx2.fillStyle='#666';ctx2.font='9px sans-serif';ctx2.textAlign='center';
-      const step=Math.ceil(maxD2/5);
-      for(let km=0;km<=maxD2+0.01;km+=step){ctx2.fillText(km.toFixed(0)+'km',xOf2(km),cvs.height-6);}
-      ctx2.textAlign='right';
-      [minE2,maxE2].forEach(e=>ctx2.fillText(e.toFixed(0)+'m',pad.left-3,yOf2(e)+4));
-    },200);
+      ctx.save();
+      ctx.translate(12,pad.top+cH/2);
+      ctx.rotate(-Math.PI/2);
+      ctx.textAlign='center'; ctx.fillStyle='#888'; ctx.font='10px sans-serif';
+      ctx.fillText('標高 (m)',0,0);
+      ctx.restore();
+      ctx.textAlign='center'; ctx.fillStyle='#888'; ctx.font='10px sans-serif';
+      ctx.fillText('距離 (km)',pad.left+cW/2,H-4);
+
+    },300);
 
     // ズームを合わせる
     const allCoords2=data.segments.flatMap(s=>s.coords||[]);
@@ -2547,6 +2628,11 @@ function drawInteractiveChart() {
     const pt = pts[ci];
     addGradMeasurePoint(pt.distFromStart, pt.elev, ci);
   };
+
+  // 勾配計測マーカーを描画
+  const totalDistI = pts[pts.length-1].distFromStart;
+  const xOfDistI = d => pad.left + (d / totalDistI) * (W - pad.left - pad.right);
+  drawGradPairs(ctx, gradMeasurePairs, gradMeasurePending, xOfDistI, yOf, pad, W, H);
 }
 
 function drawInteractiveChartWithCursor(ci) {
@@ -2756,6 +2842,7 @@ function drawElevChart(id, points) {
 }
 
 // ===== 断面図モーダル =====
+let _modalEventsRegistered = false;
 function openChartModal() {
   if (allElevPts.length < 2) return;
   document.getElementById('chartModalOverlay').classList.add('open');
@@ -2781,20 +2868,163 @@ function openChartModal() {
   document.getElementById('chartModalTitle').textContent =
     getCourseTitle() + '　' + routeLabel;
 
-  setTimeout(() => drawModalChart(), 50);
+  setTimeout(() => {
+    drawModalChart();
+    // イベントを最初の一度だけ登録
+    const canvas = document.getElementById('chart_modal_canvas');
+    if (!canvas) return;
+    if (_modalEventsRegistered) return; // 重複登録を防ぐ
+    _modalEventsRegistered = true;
+
+    canvas.onmousemove = function(e) {
+      if (allElevPts.length < 2) return;
+      const pts = allElevPts, grads = localGradients, n = pts.length;
+      const W = canvas.width, H = canvas.height;
+      const pad = { top: 20, bottom: 60, left: 54, right: 20 };
+      const cW = W - pad.left - pad.right;
+      const rect = canvas.getBoundingClientRect();
+      const mx = (e.clientX - rect.left) * (W / rect.width);
+      const ci = Math.max(0, Math.min(n - 1, Math.round((mx - pad.left) / cW * (n - 1))));
+      const pt = pts[ci], g = grads[ci];
+
+      drawModalChart(ci);
+
+      // カーソルバー更新
+      const cursorRow = document.getElementById('modalCursorRow');
+      if (cursorRow) {
+        cursorRow.style.display = 'flex';
+        document.getElementById('mc-dist').textContent = `📍 ${(pt.distFromStart/1000).toFixed(2)} km`;
+        document.getElementById('mc-elev').textContent = `標高 ${pt.elev.toFixed(0)} m`;
+        document.getElementById('mc-grad').textContent = g !== null ? `勾配 ${g.toFixed(1)} ‰` : '勾配 —';
+      }
+
+      // 地図上マーカー連動
+      if (allCoordPts[ci]) {
+        const latlng = allCoordPts[ci];
+        if (hoverMarker) hoverMarker.setLatLng(latlng);
+        else hoverMarker = L.circleMarker(latlng, {
+          radius: 9, color: '#fff', weight: 2.5,
+          fillColor: '#e74c3c', fillOpacity: 1
+        }).addTo(map);
+      }
+    };
+
+    canvas.onmouseleave = function() {
+      const cursorRow = document.getElementById('modalCursorRow');
+      if (cursorRow) cursorRow.style.display = 'none';
+      drawModalChart();
+      if (hoverMarker) { map.removeLayer(hoverMarker); hoverMarker = null; }
+    };
+
+    // クリックで勾配計測点を設定
+    canvas.onclick = function(e) {
+      if (allElevPts.length < 2) return;
+      const pts = allElevPts, n = pts.length;
+      const W = canvas.width, H = canvas.height;
+      const pad = { top: 20, bottom: 60, left: 54, right: 20 };
+      const cW = W - pad.left - pad.right;
+      const rect = canvas.getBoundingClientRect();
+      const mx = (e.clientX - rect.left) * (W / rect.width);
+      const ci = Math.max(0, Math.min(n - 1, Math.round((mx - pad.left) / cW * (n - 1))));
+      const pt = pts[ci];
+      addGradMeasurePoint(pt.distFromStart, pt.elev, ci);
+      drawModalChart(ci);
+    };
+  }, 100);
 }
 
 function closeChartModal(e) {
   if (e && e.target !== document.getElementById('chartModalOverlay') && e.type === 'click') return;
   document.getElementById('chartModalOverlay').classList.remove('open');
+  // canvasイベントをクリア
+  const canvas = document.getElementById('chart_modal_canvas');
+  if (canvas) { canvas.onmousemove = null; canvas.onmouseleave = null; canvas.onclick = null; }
+  if (hoverMarker) { map.removeLayer(hoverMarker); hoverMarker = null; }
+}
+
+// ===== PNG出力用：canvasを指定してモーダル断面図を描画 =====
+function drawChartToCanvas(canvas) {
+  if (!canvas || allElevPts.length < 2) return;
+  const savedOnclick = canvas.onclick;
+  const W = canvas.width || 900;
+  const H = canvas.height || 320;
+  const ctx = canvas.getContext('2d');
+  const pts = allElevPts, grads = localGradients, n = pts.length;
+  const elevs = pts.map(p => p.elev);
+  const minE = Math.floor(Math.min(...elevs) / 10) * 10;
+  const maxE = Math.ceil(Math.max(...elevs) / 10) * 10;
+  const totalDist = pts[n - 1].distFromStart;
+  const pad = { top: 20, bottom: 60, left: 54, right: 20 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+  const xOf = d => pad.left + (d / totalDist) * cW;
+  const yOf = e => pad.top + (1 - (e - minE) / (maxE - minE)) * cH;
+  const xOfI = i => xOf(pts[i].distFromStart);
+
+  ctx.clearRect(0, 0, W, H);
+
+  // drawModalChartと同じ内容を描画（勾配マーカー含む）
+  // 背景
+  ctx.fillStyle = '#f4f8fc'; ctx.fillRect(0, 0, W, H);
+
+  // グリッドと目盛り
+  const eRange = maxE - minE;
+  const eStep = eRange <= 50 ? 10 : eRange <= 200 ? 50 : 100;
+  ctx.font = '11px sans-serif'; ctx.textAlign = 'right'; ctx.fillStyle = '#666';
+  ctx.strokeStyle = 'rgba(0,0,0,0.07)'; ctx.lineWidth = 1;
+  for (let e = Math.ceil(minE / eStep) * eStep; e <= maxE; e += eStep) {
+    const y = yOf(e);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillText(e + 'm', pad.left - 4, y + 4);
+  }
+  const kmStep = totalDist <= 5000 ? 1000 : totalDist <= 20000 ? 5000 : 10000;
+  ctx.textAlign = 'center';
+  for (let d = 0; d <= totalDist; d += kmStep) {
+    const x = xOf(d);
+    ctx.fillText((d / 1000).toFixed(0) + 'km', x, H - pad.bottom + 16);
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, H - pad.bottom); ctx.stroke();
+  }
+
+  // 塗り
+  ctx.beginPath();
+  ctx.moveTo(xOfI(0), yOf(pts[0].elev));
+  for (let i = 1; i < n; i++) ctx.lineTo(xOfI(i), yOf(pts[i].elev));
+  ctx.lineTo(xOfI(n - 1), H - pad.bottom);
+  ctx.lineTo(xOfI(0), H - pad.bottom);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, pad.top, 0, H - pad.bottom);
+  grad.addColorStop(0, 'rgba(220,38,38,.2)');
+  grad.addColorStop(1, 'rgba(220,38,38,.02)');
+  ctx.fillStyle = grad; ctx.fill();
+
+  // ルートライン
+  let gi = 0;
+  segments.filter(s => !s.error && s.elevPts && s.elevPts.length).forEach(seg => {
+    const sc = MODE_CONFIG[seg.mode || 'river'].color;
+    ctx.beginPath();
+    for (let k = 0; k < seg.elevPts.length; k++) {
+      const idx = gi + k;
+      if (idx >= n) break;
+      k === 0 ? ctx.moveTo(xOfI(idx), yOf(pts[idx].elev)) : ctx.lineTo(xOfI(idx), yOf(pts[idx].elev));
+    }
+    ctx.strokeStyle = sc; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.stroke();
+    gi += seg.elevPts.length;
+  });
+
+  // 勾配計測マーカー
+  drawGradPairs(ctx, gradMeasurePairs, gradMeasurePending, xOf, yOf, pad, W, H);
 }
 
 function drawModalChart(cursorIdx = null) {
   const canvas = document.getElementById('chart_modal_canvas');
   if (!canvas || allElevPts.length < 2) return;
-  const W = canvas.offsetWidth || 800;
+  // offsetWidthが0の場合（モーダル非表示時）は固定値を使う
+  const W = (canvas.offsetWidth > 0 ? canvas.offsetWidth : 900);
   const H = 320;
-  canvas.width = W; canvas.height = H;
+  // canvas.width代入はイベントをクリアするため、変化した時だけ実行
+  if (canvas.width !== W || canvas.height !== H) {
+    canvas.width = W; canvas.height = H;
+  }
   const ctx = canvas.getContext('2d');
 
   const pts = allElevPts, grads = localGradients, n = pts.length;
@@ -3031,76 +3261,7 @@ function drawModalChart(cursorIdx = null) {
     });
   }
 
-  // ===== 勾配計測マーカーを描画 =====
-  const totalDist2 = pts[pts.length-1].distFromStart;
-  const xOfDist = d => pad.left + (d / totalDist2) * (W - pad.left - pad.right);
-
-  // 確定済みペアを描画
-  gradMeasurePairs.forEach((pair, pi) => {
-    const x1 = xOfDist(pair.from.dist);
-    const x2 = xOfDist(pair.to.dist);
-    const y1 = yOf(pair.from.elev);
-    const y2 = yOf(pair.to.elev);
-    const distKm = (pair.to.dist - pair.from.dist) / 1000;
-    const elevDiff = pair.to.elev - pair.from.elev;
-    const permil = distKm > 0 ? (elevDiff / (pair.to.dist - pair.from.dist) * 1000) : 0;
-    const sign = permil >= 0 ? '+' : '';
-    const pColor = permil > 15 ? '#e74c3c' : permil > 5 ? '#f39c12' : permil < -15 ? '#2980b9' : '#27ae60';
-
-    ctx.save();
-    // 縦線（始点・終点）
-    ctx.strokeStyle = pColor; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
-    ctx.globalAlpha = 0.7;
-    ctx.beginPath(); ctx.moveTo(x1, pad.top); ctx.lineTo(x1, H - pad.bottom); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x2, pad.top); ctx.lineTo(x2, H - pad.bottom); ctx.stroke();
-    ctx.setLineDash([]); ctx.globalAlpha = 1;
-
-    // 水平矢印線
-    const midY = Math.min(y1, y2) - 12;
-    ctx.strokeStyle = pColor; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(x1, midY); ctx.lineTo(x2, midY); ctx.stroke();
-    // 矢印頭
-    ctx.beginPath(); ctx.moveTo(x1, midY-4); ctx.lineTo(x1, midY+4); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x2, midY-4); ctx.lineTo(x2, midY+4); ctx.stroke();
-
-    // 勾配ラベル（中央）
-    const midX = (x1 + x2) / 2;
-    const label = `${sign}${permil.toFixed(1)}‰`;
-    ctx.font = 'bold 11px sans-serif';
-    const tw = ctx.measureText(label).width + 8;
-    ctx.fillStyle = pColor;
-    if (ctx.roundRect) ctx.roundRect(midX - tw/2, midY - 22, tw, 16, 4);
-    else ctx.rect(midX - tw/2, midY - 22, tw, 16);
-    ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
-    ctx.fillText(label, midX, midY - 11);
-    ctx.textAlign = 'left';
-
-    // マーカー丸
-    [x1, x2].forEach(x => {
-      ctx.beginPath(); ctx.arc(x, yOf(x === x1 ? pair.from.elev : pair.to.elev), 5, 0, Math.PI*2);
-      ctx.fillStyle = pColor; ctx.fill();
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
-    });
-    ctx.restore();
-  });
-
-  // 待機中の始点マーカー
-  if (gradMeasurePending) {
-    const x = xOfDist(gradMeasurePending.dist);
-    const y = yOf(gradMeasurePending.elev);
-    ctx.save();
-    ctx.strokeStyle = '#1a5a8a'; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
-    ctx.globalAlpha = 0.6;
-    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, H - pad.bottom); ctx.stroke();
-    ctx.setLineDash([]); ctx.globalAlpha = 1;
-    ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI*2);
-    ctx.fillStyle = '#1a5a8a'; ctx.fill();
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
-    ctx.restore();
-  }
-
-  // ===== カーソル十字線 =====
+  // カーソル十字線
   if (cursorIdx !== null) {
     const pt = pts[cursorIdx];
     const x = xOfI(cursorIdx), y = yOf(pt.elev);
@@ -3115,120 +3276,120 @@ function drawModalChart(cursorIdx = null) {
     ctx.fillStyle = ROUTE_COLOR; ctx.fill();
   }
 
-  // ===== 勾配計測マーカー（モーダル） =====
-  gradMeasurePairs.forEach((pair) => {
-    const x1 = xOf(pair.from.dist), x2 = xOf(pair.to.dist);
-    const y1 = yOf(pair.from.elev),  y2 = yOf(pair.to.elev);
-    const distM = pair.to.dist - pair.from.dist;
+  // 勾配計測マーカー
+  drawGradPairs(ctx, gradMeasurePairs, gradMeasurePending, xOf, yOf, pad, W, H);
+}
+// ===== 勾配計測マーカー共通描画関数 =====
+function drawGradPairs(ctx, gradPairs, gradPending, xOfDist, yOf, pad, W, H) {
+  gradPairs.forEach((pair) => {
+    const x1 = xOfDist(pair.from.dist);
+    const x2 = xOfDist(pair.to.dist);
+    const y1 = yOf(pair.from.elev);
+    const y2 = yOf(pair.to.elev);
+    const distKm = (pair.to.dist - pair.from.dist) / 1000;
     const elevDiff = pair.to.elev - pair.from.elev;
-    const permil = distM > 0 ? (elevDiff / distM * 1000) : 0;
+    const permil = distKm > 0 ? (elevDiff / (pair.to.dist - pair.from.dist) * 1000) : 0;
     const sign = permil >= 0 ? '+' : '';
     const pColor = permil > 15 ? '#e74c3c' : permil > 5 ? '#f39c12' : permil < -15 ? '#2980b9' : '#27ae60';
 
     ctx.save();
-    // 縦破線
-    ctx.strokeStyle = pColor; ctx.lineWidth = 2; ctx.setLineDash([5,4]);
-    ctx.globalAlpha = 0.8;
-    ctx.beginPath(); ctx.moveTo(x1, pad.top); ctx.lineTo(x1, H - pad.bottom); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x2, pad.top); ctx.lineTo(x2, H - pad.bottom); ctx.stroke();
-    ctx.setLineDash([]); ctx.globalAlpha = 1;
 
-    // 水平矢印線
-    const midY = Math.min(y1, y2) - 16;
-    ctx.strokeStyle = pColor; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(x1, midY); ctx.lineTo(x2, midY); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x1, midY-5); ctx.lineTo(x1, midY+5); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x2, midY-5); ctx.lineTo(x2, midY+5); ctx.stroke();
+    // 区間のルートライン上にハイライト線
+    ctx.strokeStyle = pColor; ctx.lineWidth = 4; ctx.globalAlpha = 0.3;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.globalAlpha = 1;
 
-    // 勾配ラベル
+    // 始点・終点に細長い▼マーカー（先端がルートライン上に乗る）
+    [[x1, y1], [x2, y2]].forEach(([x, y]) => {
+      const sw = 7;  // 横幅の半分
+      const sh = 16; // 高さ（先端まで）
+      ctx.beginPath();
+      ctx.moveTo(x, y);           // 先端（ルートライン上）
+      ctx.lineTo(x - sw, y - sh); // 左上
+      ctx.lineTo(x + sw, y - sh); // 右上
+      ctx.closePath();
+      ctx.fillStyle = pColor; ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    });
+
+    // ラベルボックス（マーカー上端の少し上）
     const midX = (x1 + x2) / 2;
-    const distKm = (pair.to.dist - pair.from.dist) / 1000;
-    const label = `${sign}${permil.toFixed(1)}‰  ${distKm.toFixed(2)}km  ${elevDiff>=0?'+':''}${elevDiff.toFixed(0)}m`;
-    ctx.font = 'bold 13px sans-serif';
-    const tw = ctx.measureText(label).width + 12;
-    ctx.fillStyle = pColor;
-    if (ctx.roundRect) ctx.roundRect(midX - tw/2, midY - 26, tw, 20, 5);
-    else ctx.rect(midX - tw/2, midY - 26, tw, 20);
+    const midY = (y1 + y2) / 2;
+    const markerTop = midY - 16; // マーカー上端
+    const line1 = `${sign}${permil.toFixed(1)}‰`;
+    const line2 = `${distKm.toFixed(2)}km  ${elevDiff >= 0 ? '+' : ''}${elevDiff.toFixed(0)}m`;
+
+    ctx.font = 'bold 12px sans-serif';
+    const tw1 = ctx.measureText(line1).width;
+    ctx.font = '10px sans-serif';
+    const tw2 = ctx.measureText(line2).width;
+    const bw = Math.max(tw1, tw2) + 14;
+    const bh = 30;
+
+    const bx = Math.min(Math.max(midX - bw/2, pad.left + 2), W - pad.right - bw - 2);
+    const by = Math.max(pad.top + 2, markerTop - bh - 6);
+
+    // 背景ボックス
+    ctx.fillStyle = pColor; ctx.globalAlpha = 0.92;
+    if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, 5);
+    else ctx.rect(bx, by, bw, bh);
     ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // テキスト
     ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
-    ctx.fillText(label, midX, midY - 12);
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillText(line1, bx + bw/2, by + 13);
+    ctx.font = '10px sans-serif';
+    ctx.fillText(line2, bx + bw/2, by + 25);
     ctx.textAlign = 'left';
 
-    // マーカー丸
-    [[x1, pair.from.elev], [x2, pair.to.elev]].forEach(([x, e]) => {
-      ctx.beginPath(); ctx.arc(x, yOf(e), 6, 0, Math.PI*2);
-      ctx.fillStyle = pColor; ctx.fill();
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
-    });
+    // 引き出し線（ラベルボックス下端→マーカー上端）
+    const lineFromY = by + bh;
+    const lineToY = markerTop - 2;
+    if (lineToY > lineFromY) {
+      ctx.strokeStyle = pColor; ctx.lineWidth = 1; ctx.globalAlpha = 0.5;
+      ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.moveTo(midX, lineFromY); ctx.lineTo(midX, lineToY); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+
     ctx.restore();
   });
 
-  // 始点待ちマーカー
-  if (gradMeasurePending) {
-    const x = xOf(gradMeasurePending.dist), y = yOf(gradMeasurePending.elev);
+  // 待機中の始点マーカー（▼ + 「始点」ラベル）
+  if (gradPending) {
+    const x = xOfDist(gradPending.dist);
+    const y = yOf(gradPending.elev);
     ctx.save();
-    ctx.strokeStyle = '#1a5a8a'; ctx.lineWidth = 2; ctx.setLineDash([5,4]);
-    ctx.globalAlpha = 0.7;
-    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, H - pad.bottom); ctx.stroke();
-    ctx.setLineDash([]); ctx.globalAlpha = 1;
-    ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI*2);
+    const sw2 = 7, sh2 = 16;
+    // 細長い▼マーカー（先端がルートライン上）
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - sw2, y - sh2);
+    ctx.lineTo(x + sw2, y - sh2);
+    ctx.closePath();
     ctx.fillStyle = '#1a5a8a'; ctx.fill();
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    // 「始点」ラベル
+    ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center';
+    const lw = ctx.measureText('始点').width + 12;
+    const lx = Math.min(Math.max(x - lw/2, pad.left + 2), W - pad.right - lw - 2);
+    const ly = Math.max(pad.top + 2, y - sh2 - 20);
+    ctx.fillStyle = '#1a5a8a';
+    if (ctx.roundRect) ctx.roundRect(lx, ly, lw, 16, 4);
+    else ctx.rect(lx, ly, lw, 16);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText('始点', x, ly + 12);
+    ctx.textAlign = 'left';
     ctx.restore();
   }
-
-  // ===== ホバーイベント（モーダル用） =====
-  canvas.onmousemove = function(e) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const ci = Math.max(0, Math.min(n - 1,
-      Math.round((mx - pad.left) / cW * (n - 1))
-    ));
-    const pt = pts[ci], g = grads[ci];
-    drawModalChart(ci);
-    // カーソルバー更新
-    const cursorRow = document.getElementById('modalCursorRow');
-    cursorRow.style.display = 'flex';
-    document.getElementById('mc-dist').textContent = `📍 ${(pt.distFromStart/1000).toFixed(2)} km`;
-    document.getElementById('mc-elev').textContent = `標高 ${pt.elev.toFixed(0)} m`;
-    document.getElementById('mc-grad').textContent = g !== null ? `勾配 ${g.toFixed(1)} ‰` : '勾配 —';
-    // 地図上マーカーも連動
-    if (allCoordPts[ci]) {
-      const latlng = allCoordPts[ci];
-      if (hoverMarker) hoverMarker.setLatLng(latlng);
-      else hoverMarker = L.circleMarker(latlng, { radius: 8, color: '#fff', weight: 2, fillColor: ROUTE_COLOR, fillOpacity: 1 }).addTo(map);
-    }
-  };
-  canvas.onmouseleave = function() {
-    document.getElementById('modalCursorRow').style.display = 'none';
-    drawModalChart();
-    if (hoverMarker) { map.removeLayer(hoverMarker); hoverMarker = null; }
-  };
 }
 
 // モーダル断面図の勾配計測クリックは一度だけ登録
-(function setupModalChartClick() {
-  // openChartModal後にcanvasが存在するタイミングで登録
-  document.addEventListener('click', function(e) {
-    const canvas = document.getElementById('chart_modal_canvas');
-    if (!canvas || e.target !== canvas) return;
-    if (allElevPts.length < 2) return;
-    const pts = allElevPts;
-    const n = pts.length;
-    const W = canvas.width, H = canvas.height;
-    const pad = { top: 20, bottom: 60, left: 54, right: 20 };
-    const cW = W - pad.left - pad.right;
-    const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) * (W / rect.width);
-    const ci = Math.max(0, Math.min(n - 1,
-      Math.round((mx - pad.left) / cW * (n - 1))
-    ));
-    const pt = pts[ci];
-    addGradMeasurePoint(pt.distFromStart, pt.elev, ci);
-    drawModalChart();
-    e.stopPropagation(); // closeChartModalが発火しないようにする
-  });
-})();
+// モーダルのclickはopenChartModal内で設定するためここは不要
+// (setupModalChartClick廃止)
 
 // ===== 出力機能 =====
 
@@ -3280,9 +3441,11 @@ function exportPNG() {
   const endName = _tl1[_tl1.length-1];
   const routeTitle = _tl1.join(' → ');
 
-  // 断面図を一時描画（明るい背景用に再描画）
-  drawModalChart();
-  const chartCanvas = document.getElementById('chart_modal_canvas');
+  // 断面図を専用の一時canvasに描画（chart_modal_canvasのイベントを壊さない）
+  const chartCanvas = document.createElement('canvas');
+  chartCanvas.width = 900; chartCanvas.height = 320;
+  // allElevPtsとgradMeasurePairsを使って直接描画
+  drawChartToCanvas(chartCanvas);
 
   // 合成キャンバス（横長SNS向け 1200×630）
   const W = 1200, H = 630;
@@ -3824,11 +3987,13 @@ function drawLeaderLabel(ctx, x, y, text, dirHint, pt, pi) {
   const o = offsets[dir] || offsets.right;
 
   ctx.save();
-  ctx.setLineDash([5, 4]);
+  ctx.setLineDash([3, 6]);
   ctx.strokeStyle = 'rgba(60,60,60,0.75)';
   ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
   ctx.beginPath(); ctx.moveTo(o.lx, o.ly); ctx.lineTo(o.ex, o.ey); ctx.stroke();
   ctx.setLineDash([]);
+  ctx.lineCap = 'butt';
 
   ctx.fillStyle = 'rgba(255,255,255,0.95)';
   ctx.shadowColor = 'rgba(0,0,0,0.2)'; ctx.shadowBlur = 4;
@@ -4110,10 +4275,15 @@ function generateViewerLink() {
       labelLen: s.labelLen || 2,
       coords: s.coords ? s.coords.filter((_,i)=>i % Math.max(1, Math.floor(s.coords.length/200)) === 0) : [],
       distKm: s.distKm,
+      distM: s.distM || 0,
       elevDiff: s.elevDiff,
       permil: s.permil,
       startElev: s.startElev,
       endElev: s.endElev,
+      // elevPtsを間引いて含める（断面図の品質向上）
+      elevPts: s.elevPts && s.elevPts.length > 1
+        ? s.elevPts.filter((_,i)=>i % Math.max(1, Math.floor(s.elevPts.length/150)) === 0)
+        : [],
     })),
     modeColors: Object.fromEntries(Object.entries(MODE_CONFIG).map(([k,v])=>[k,v.color])),
   };
@@ -4228,7 +4398,7 @@ function buildViewerHTML(encoded) {
     '  if(pt.desc&&pt.desc.trim()){' +
     '    const dd=pt.descDir||"auto";' +
     // オフセット方向を決定
-    '    let dlat=0.008,dlng=0.008;' +
+    '    let dlat=0,dlng=0.012;' +
     '    if(dd==="top"){dlat=0.012;dlng=0;}' +
     '    else if(dd==="bottom"){dlat=-0.012;dlng=0;}' +
     '    else if(dd==="left"){dlat=0;dlng=-0.012;}' +
@@ -4238,7 +4408,7 @@ function buildViewerHTML(encoded) {
     '    }' +
     '    const descLL=[pt.lat+dlat,pt.lng+dlng];' +
     // リーダーライン
-    '    L.polyline([[pt.lat,pt.lng],descLL],{color:"#555",weight:2,opacity:0.75,dashArray:"4,3",interactive:false}).addTo(map);' +
+    '    L.polyline([[pt.lat,pt.lng],descLL],{color:"#555",weight:2,opacity:0.75,dashArray:"3,6",interactive:false}).addTo(map);' +
     // テキストバッジ
     '    const textOnRight=dlng>=0;' +
     '    const dw=Math.max(80,[...pt.desc].reduce((w,ch)=>w+(ch.charCodeAt(0)>127?14:8),0)+20);' +
@@ -4265,7 +4435,7 @@ function buildViewerHTML(encoded) {
     '  else if(d==="bottomright"){dlat=-off;dlng=off;}' +
     '  const iconLL=[midLL[0]+dlat,midLL[1]+dlng];' +
     // リーダーライン
-    '  L.polyline([midLL,iconLL],{color:cfg.color,weight:3,opacity:0.85,dashArray:"5,4",interactive:false}).addTo(map);' +
+    '  L.polyline([midLL,iconLL],{color:cfg.color,weight:3,opacity:0.85,dashArray:"3,6",interactive:false}).addTo(map);' +
     // アイコン＋コメントバッジ
     '  const emoji=MODE_EMOJI[seg.mode]||"";' +
     '  const textOnRight=dlng>=0;' +
