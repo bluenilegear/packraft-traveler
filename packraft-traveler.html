@@ -1381,41 +1381,56 @@ renderMapLegend(); // 凡例を初回表示
       cvs.width=W; cvs.height=H;
       const ctx=cvs.getContext('2d');
 
-      // elevPtsが保存されていればそれを使用、なければ補間
+      // 断面図データを構築（複数フォールバック）
       const pts=[];
       let cumD=0;
       data.segments.forEach(seg=>{
-        if(!seg.coords||seg.startElev==null)return;
+        if(!seg.coords||!seg.coords.length) return;
         const segDist = seg.distM || (seg.distKm ? seg.distKm*1000 : 0);
-        if(seg.elevPts&&seg.elevPts.length>1){
+
+        // ① elevPts（標高点列）があれば使う
+        if(seg.elevPts && seg.elevPts.length>1){
           seg.elevPts.forEach(p=>{
-            // distFromStart（絶対距離）かdist（相対距離）どちらでも対応
-            const d = p.distFromStart != null ? p.distFromStart
-                    : p.dist != null ? cumD + p.dist
-                    : null;
-            if(d == null || p.elev == null || isNaN(p.elev)) return;
-            pts.push({distFromStart: d, elev: p.elev, mode: seg.mode||'river'});
+            if(p.elev==null||isNaN(p.elev)) return;
+            // distFromStartが絶対距離として保存されている場合
+            const dfs = p.distFromStart != null ? p.distFromStart : null;
+            if(dfs != null && !isNaN(dfs)){
+              pts.push({distFromStart: dfs, elev: p.elev, mode: seg.mode||'river'});
+            }
           });
-        } else {
-          const n2 = seg.coords.length;
-          for(let i=0;i<n2;i++){
-            const e = seg.startElev + (seg.endElev - seg.startElev) * (i / (n2-1||1));
-            pts.push({distFromStart: cumD + segDist * i / (n2-1||1), elev: e, mode: seg.mode||'river'});
+          if(pts.length > 0){
+            cumD = pts[pts.length-1].distFromStart;
+            cumD += segDist / Math.max(seg.elevPts.length, 1);
+            return;
+          }
+        }
+
+        // ② startElev/endElevから線形補間
+        const sE = seg.startElev, eE = seg.endElev;
+        if(sE != null && eE != null && segDist > 0){
+          const steps = Math.min(seg.coords.length, 20);
+          for(let i=0;i<steps;i++){
+            const t = i/(steps-1||1);
+            pts.push({distFromStart: cumD+segDist*t, elev: sE+(eE-sE)*t, mode: seg.mode||'river'});
           }
         }
         cumD += segDist;
       });
-      if(pts.length<2)return;
+
+      if(pts.length<2) return;
 
       const n=pts.length;
-      const elevs=pts.map(p=>p.elev);
+      const elevs=pts.map(p=>p.elev).filter(e=>e!=null&&!isNaN(e));
+      if(elevs.length<2) return;
       const minE=Math.floor(Math.min(...elevs)/10)*10;
       const maxE=Math.ceil(Math.max(...elevs)/10)*10;
-      const totalDist=pts[n-1].distFromStart;
+      const elevRange = maxE - minE || 10; // ゼロ除算防止
+      const totalDist=pts[pts.length-1].distFromStart;
+      if(!totalDist||isNaN(totalDist)||totalDist<=0) return;
       const pad={top:24,bottom:44,left:50,right:16};
       const cW=W-pad.left-pad.right, cH=H-pad.top-pad.bottom;
       const xOf=d=>pad.left+(d/totalDist)*cW;
-      const yOf=e=>pad.top+(1-(e-minE)/(maxE-minE||1))*cH;
+      const yOf=e=>pad.top+(1-(e-minE)/elevRange)*cH;
       const xOfI=i=>xOf(pts[i].distFromStart);
 
       // 背景
