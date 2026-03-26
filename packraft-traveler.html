@@ -1387,15 +1387,21 @@ renderMapLegend(); // 凡例を初回表示
       data.segments.forEach(seg=>{
         if(!seg.coords||seg.startElev==null)return;
         if(seg.elevPts&&seg.elevPts.length>1){
-          seg.elevPts.forEach(p=>pts.push({distFromStart:cumD+p.dist,elev:p.elev,mode:seg.mode||'river'}));
+          seg.elevPts.forEach(p=>{
+            const dist = (p.dist||0);
+            const elev = p.elev;
+            if(elev==null||isNaN(elev)) return; // 無効データをスキップ
+            pts.push({distFromStart:cumD+dist,elev:elev,mode:seg.mode||'river'});
+          });
         } else {
           const n2=seg.coords.length;
+          const segDist = seg.distM || (seg.distKm ? seg.distKm*1000 : 0);
           for(let i=0;i<n2;i++){
             const e=seg.startElev+(seg.endElev-seg.startElev)*(i/(n2-1||1));
-            pts.push({distFromStart:cumD+seg.distM*i/(n2-1||1),elev:e,mode:seg.mode||'river'});
+            pts.push({distFromStart:cumD+segDist*i/(n2-1||1),elev:e,mode:seg.mode||'river'});
           }
         }
-        cumD+=seg.distM||0;
+        cumD+=(seg.distM||seg.distKm*1000||0);
       });
       if(pts.length<2)return;
 
