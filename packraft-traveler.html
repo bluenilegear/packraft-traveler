@@ -1381,28 +1381,33 @@ renderMapLegend(); // 凡例を初回表示
       cvs.width=W; cvs.height=H;
       const ctx=cvs.getContext('2d');
 
-      // 断面図データを構築（複数フォールバック）
+      // 断面図データを構築（elevPtsのlat/lonから距離を再計算）
       const pts=[];
       let cumD=0;
       data.segments.forEach(seg=>{
         if(!seg.coords||!seg.coords.length) return;
         const segDist = seg.distM || (seg.distKm ? seg.distKm*1000 : 0);
 
-        // ① elevPts（標高点列）があれば使う
+        // ① elevPts（{lat,lon,elev}形式）があれば距離を再計算して使用
         if(seg.elevPts && seg.elevPts.length>1){
-          seg.elevPts.forEach(p=>{
+          let localD = 0;
+          seg.elevPts.forEach((p, pi)=>{
             if(p.elev==null||isNaN(p.elev)) return;
-            // distFromStartが絶対距離として保存されている場合
-            const dfs = p.distFromStart != null ? p.distFromStart : null;
-            if(dfs != null && !isNaN(dfs)){
-              pts.push({distFromStart: dfs, elev: p.elev, mode: seg.mode||'river'});
+            if(pi>0){
+              const prev = seg.elevPts[pi-1];
+              if(prev.lat!=null && prev.lon!=null && p.lat!=null && p.lon!=null){
+                // haversineで距離計算（haversineはグローバル関数）
+                const dlat = (p.lat-prev.lat)*Math.PI/180;
+                const dlng = (p.lon-prev.lon)*Math.PI/180;
+                const a = Math.sin(dlat/2)**2 + Math.cos(prev.lat*Math.PI/180)*Math.cos(p.lat*Math.PI/180)*Math.sin(dlng/2)**2;
+                localD += 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+              }
             }
+            pts.push({distFromStart: cumD+localD, elev: p.elev, mode: seg.mode||'river'});
           });
-          if(pts.length > 0){
-            cumD = pts[pts.length-1].distFromStart;
-            cumD += segDist / Math.max(seg.elevPts.length, 1);
-            return;
-          }
+          // 区間の累積距離をsegDistで進める
+          cumD += segDist;
+          return;
         }
 
         // ② startElev/endElevから線形補間
