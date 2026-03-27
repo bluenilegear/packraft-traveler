@@ -3477,10 +3477,10 @@ function exportPNG() {
   const routeTitle = _tl1.join(' → ');
 
   // 断面図を専用の一時canvasに描画（chart_modal_canvasのイベントを壊さない）
-  const chartCanvas = document.createElement('canvas');
+  // chart_modal_canvasに固定サイズで描画してから取得
+  const chartCanvas = document.getElementById('chart_modal_canvas');
   chartCanvas.width = 900; chartCanvas.height = 320;
-  // allElevPtsとgradMeasurePairsを使って直接描画
-  drawChartToCanvas(chartCanvas);
+  drawModalChart();
 
   // 合成キャンバス（横長SNS向け 1200×630）
   const W = 1200, H = 630;
@@ -4323,12 +4323,14 @@ function generateViewerLink() {
     modeColors: Object.fromEntries(Object.entries(MODE_CONFIG).map(([k,v])=>[k,v.color])),
   };
 
-  // 断面図PNGをBase64でdataに埋め込む
+  // 断面図PNGをBase64でdataに埋め込む（drawModalChartを使用）
   try {
-    const pngCanvas = document.createElement('canvas');
-    pngCanvas.width = 900; pngCanvas.height = 320;
-    drawChartToCanvas(pngCanvas);
-    data.chartPng = pngCanvas.toDataURL('image/png');
+    const pngCanvas = document.getElementById('chart_modal_canvas');
+    if(pngCanvas && allElevPts.length >= 2){
+      pngCanvas.width = 900; pngCanvas.height = 320;
+      drawModalChart();
+      data.chartPng = pngCanvas.toDataURL('image/png');
+    }
   } catch(e) { /* 断面図なし */ }
 
   const json = JSON.stringify(data);
