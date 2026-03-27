@@ -3050,14 +3050,14 @@ function drawChartToCanvas(canvas) {
   drawGradPairs(ctx, gradMeasurePairs, gradMeasurePending, xOf, yOf, pad, W, H);
 }
 
-function drawModalChart(cursorIdx = null) {
+function drawModalChart(cursorIdx = null, fixedW = null) {
   const canvas = document.getElementById('chart_modal_canvas');
   if (!canvas || allElevPts.length < 2) return;
-  // offsetWidthが0の場合（モーダル非表示時）は固定値を使う
-  const W = (canvas.offsetWidth > 0 ? canvas.offsetWidth : 900);
+  // fixedWが指定されていればそれを使用、なければoffsetWidth
+  const W = fixedW || (canvas.offsetWidth > 0 ? canvas.offsetWidth : 900);
   const H = 320;
-  // canvas.width代入はイベントをクリアするため、変化した時だけ実行
-  if (canvas.width !== W || canvas.height !== H) {
+  // 常にサイズを設定（固定サイズ指定時は必ず）
+  if (fixedW || canvas.width !== W || canvas.height !== H) {
     canvas.width = W; canvas.height = H;
   }
   const ctx = canvas.getContext('2d');
@@ -3477,10 +3477,9 @@ function exportPNG() {
   const routeTitle = _tl1.join(' → ');
 
   // 断面図を専用の一時canvasに描画（chart_modal_canvasのイベントを壊さない）
-  // chart_modal_canvasに固定サイズで描画してから取得
+  // chart_modal_canvasに固定900pxで描画してから取得
   const chartCanvas = document.getElementById('chart_modal_canvas');
-  chartCanvas.width = 900; chartCanvas.height = 320;
-  drawModalChart();
+  drawModalChart(null, 900);
 
   // 合成キャンバス（横長SNS向け 1200×630）
   const W = 1200, H = 630;
