@@ -4414,14 +4414,10 @@ function generateViewerLink() {
     modeColors: Object.fromEntries(Object.entries(MODE_CONFIG).map(([k,v])=>[k,v.color])),
   };
 
-  // 断面図PNGをBase64でdataに埋め込む（drawModalChartを使用）
+  // 断面図PNGをBase64でdataに埋め込む（勾配計測マーカー含む）
   try {
-    const pngCanvas = document.getElementById('chart_modal_canvas');
-    if(pngCanvas && allElevPts.length >= 2){
-      pngCanvas.width = 900; pngCanvas.height = 320;
-      drawModalChart();
-      data.chartPng = pngCanvas.toDataURL('image/png');
-    }
+    const offscreen = drawChartOffscreen(900, 320);
+    if(offscreen) data.chartPng = offscreen.toDataURL('image/png');
   } catch(e) { /* 断面図なし */ }
 
   const json = JSON.stringify(data);
