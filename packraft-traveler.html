@@ -1260,8 +1260,7 @@ renderMapLegend(); // 凡例を初回表示
       '<span style="margin-left:8px;font-size:12px;opacity:0.85" id="vRouteLabel"></span>' +
       '<span style="font-size:11px;font-weight:600;margin-left:6px" id="vTitle"></span>' +
       '<span style="margin-left:auto;font-size:10px;opacity:0.6">閲覧専用</span>' +
-      '<button onclick="document.getElementById(\'vDataPanel\').style.display=document.getElementById(\'vDataPanel\').style.display===\'none\'?\'block\':\'none\'" style="background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.4);color:#fff;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;margin-left:8px">データ</button>' +
-      '<button onclick="document.getElementById(\'vChartPanel\').style.display=document.getElementById(\'vChartPanel\').style.display===\'none\'?\'block\':\'none\'" style="background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.4);color:#fff;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;margin-left:4px">断面図</button>';
+      '<button onclick="toggleViewerPanel()" id="viewerPanelBtn" style="background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.4);color:#fff;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;margin-left:8px">📊 データ・断面図</button>';
     document.body.appendChild(infoBar);
 
     // 凡例
@@ -1270,18 +1269,30 @@ renderMapLegend(); // 凡例を初回表示
     leg.innerHTML = '<div style="font-weight:700;color:#1a5a8a;margin-bottom:6px;font-size:12px">ルート凡例</div><div id="vLegendItems"></div>';
     document.body.appendChild(leg);
 
-    // データパネル
+    // 統合パネル（データ＋断面図）
     const dp = document.createElement('div');
     dp.id = 'vDataPanel';
-    dp.style.cssText = 'position:fixed;bottom:20px;right:12px;z-index:1500;background:#fff;border:2px solid #1a5a8a;border-radius:10px;min-width:320px;box-shadow:0 4px 16px rgba(0,0,0,0.2);display:none;overflow:hidden';
+    dp.style.cssText = 'display:none'; // 後方互換用（非表示）
     document.body.appendChild(dp);
 
-    // 断面図パネル
     const cp = document.createElement('div');
     cp.id = 'vChartPanel';
-    cp.style.cssText = 'position:fixed;bottom:20px;left:12px;right:12px;max-width:900px;margin:0 auto;z-index:1500;background:#fff;border:2px solid #1a5a8a;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.2);display:none;overflow:hidden';
-    cp.innerHTML = '<div style="background:#1a5a8a;color:#fff;padding:7px 12px;font-size:12px;font-weight:700">断面図</div><canvas id="vChartCanvas" style="width:100%;height:320px;display:block;padding:8px 8px 4px 8px"></canvas>';
+    cp.style.cssText = 'display:none'; // 後方互換用（非表示）
     document.body.appendChild(cp);
+
+    // 統合パネル本体
+    const vp = document.createElement('div');
+    vp.id = 'vUnifiedPanel';
+    vp.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:1500;background:#fff;border-top:2px solid #1a5a8a;box-shadow:0 -4px 16px rgba(0,0,0,0.15);display:none;overflow:auto;max-height:70vh';
+    vp.innerHTML =
+      '<div style="background:linear-gradient(135deg,#1a5a8a,#0d3a5c);color:#fff;padding:8px 14px;display:flex;align-items:center;justify-content:space-between">' +
+        '<span style="font-size:13px;font-weight:700">データ・断面図</span>' +
+        '<button onclick="document.getElementById(\'vUnifiedPanel\').style.display=\'none\'" ' +
+          'style="background:rgba(255,255,255,0.2);border:none;color:#fff;border-radius:4px;padding:2px 10px;cursor:pointer;font-size:14px">✕</button>' +
+      '</div>' +
+      '<div id="vUnifiedData" style="padding:12px 16px;border-bottom:1px solid #dde8f0"></div>' +
+      '<canvas id="vChartCanvas" style="width:100%;height:280px;display:block;padding:8px"></canvas>';
+    document.body.appendChild(vp);
 
     // ポイントを地図に追加
     const totalPts = data.points.length;
@@ -1365,15 +1376,20 @@ renderMapLegend(); // 凡例を初回表示
     const rDist=rSegs.reduce((a,s)=>a+(s.distKm||0),0);
     const rDrop=rSegs.reduce((a,s)=>a+((s.endElev||0)-(s.startElev||0)),0);
     const rGrad=rDist>0?rDrop/rDist:0;
-    dp.innerHTML='<div style="background:#1a5a8a;color:#fff;padding:8px 14px;font-size:12px;font-weight:700">'+(data.title||'コース')+' ルート情報　'+labels[0]+'→'+labels[labels.length-1]+'</div>'+
-      '<div style="padding:10px 14px">'+
-      [['総距離',totalDist.toFixed(2)+' km'],['川下り距離',rDist>0?rDist.toFixed(2)+' km':'—'],
-       ['川下り標高差',rDist>0?(rDrop>=0?'+':'')+rDrop.toFixed(0)+' m':'—'],
-       ['川下り平均勾配',rDist>0?(rGrad>=0?'+':'')+rGrad.toFixed(2)+' ‰':'—']
-      ].map(([k,v])=>'<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #eee;font-size:12px"><span>'+k+'</span><span style="font-family:monospace;font-weight:700;color:#1a2a3a">'+v+'</span></div>').join('')+
-      '</div>';
+    // データを統合パネルのデータ欄に表示
+    const vUnifiedData = document.getElementById('vUnifiedData');
+    if(vUnifiedData){
+      vUnifiedData.innerHTML=
+        '<div style="font-size:11px;font-weight:700;color:#1a5a8a;margin-bottom:6px">'+(data.title||'コース')+' 　'+labels[0]+' → '+labels[labels.length-1]+'</div>'+
+        '<div style="display:flex;flex-wrap:wrap;gap:8px">'+
+        [['総距離',totalDist.toFixed(2)+' km'],['川下り距離',rDist>0?rDist.toFixed(2)+' km':'—'],
+         ['標高差',rDist>0?(rDrop>=0?'+':'')+rDrop.toFixed(0)+' m':'—'],
+         ['平均勾配',rDist>0?(rGrad>=0?'+':'')+rGrad.toFixed(2)+' ‰':'—']
+        ].map(([k,v])=>'<div style="background:#f4f8fc;border:1px solid #dde8f0;border-radius:6px;padding:5px 10px;font-size:11px"><div style="color:#666;margin-bottom:2px">'+k+'</div><div style="font-weight:700;color:#1a2a3a;font-family:monospace">'+v+'</div></div>').join('')+
+        '</div>';
+    }
 
-    // 断面図（出力と同等の本格描画）
+    // 断面図（drawChartToCanvas相当の描画をdataから構築）
     setTimeout(()=>{
       const cvs=document.getElementById('vChartCanvas');
       if(!cvs)return;
@@ -1381,47 +1397,39 @@ renderMapLegend(); // 凡例を初回表示
       cvs.width=W; cvs.height=H;
       const ctx=cvs.getContext('2d');
 
-      // 断面図データを構築（elevPtsのlat/lonから距離を再計算）
+      // elevPtsのlat/lonから距離を再計算してptsを構築
       const pts=[];
       let cumD=0;
       data.segments.forEach(seg=>{
         if(!seg.coords||!seg.coords.length) return;
-        const segDist = seg.distM || (seg.distKm ? seg.distKm*1000 : 0);
-
-        // ① elevPts（{lat,lon,elev}形式）があれば距離を再計算して使用
-        if(seg.elevPts && seg.elevPts.length>1){
-          let localD = 0;
-          seg.elevPts.forEach((p, pi)=>{
+        const segDist=seg.distM||(seg.distKm?seg.distKm*1000:0);
+        if(seg.elevPts&&seg.elevPts.length>1){
+          let localD=0;
+          seg.elevPts.forEach((p,pi)=>{
             if(p.elev==null||isNaN(p.elev)) return;
             if(pi>0){
-              const prev = seg.elevPts[pi-1];
-              if(prev.lat!=null && prev.lon!=null && p.lat!=null && p.lon!=null){
-                // haversineで距離計算（haversineはグローバル関数）
-                const dlat = (p.lat-prev.lat)*Math.PI/180;
-                const dlng = (p.lon-prev.lon)*Math.PI/180;
-                const a = Math.sin(dlat/2)**2 + Math.cos(prev.lat*Math.PI/180)*Math.cos(p.lat*Math.PI/180)*Math.sin(dlng/2)**2;
-                localD += 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+              const prev=seg.elevPts[pi-1];
+              if(prev.lat!=null&&p.lat!=null){
+                const dlat=(p.lat-prev.lat)*Math.PI/180;
+                const dlng=(p.lon-prev.lon)*Math.PI/180;
+                const a=Math.sin(dlat/2)**2+Math.cos(prev.lat*Math.PI/180)*Math.cos(p.lat*Math.PI/180)*Math.sin(dlng/2)**2;
+                localD+=6371000*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
               }
             }
-            pts.push({distFromStart: cumD+localD, elev: p.elev, mode: seg.mode||'river'});
+            pts.push({distFromStart:cumD+localD,elev:p.elev,mode:seg.mode||'river'});
           });
-          // 区間の累積距離をsegDistで進める
-          cumD += segDist;
-          return;
+          cumD+=segDist; return;
         }
-
-        // ② startElev/endElevから線形補間
-        const sE = seg.startElev, eE = seg.endElev;
-        if(sE != null && eE != null && segDist > 0){
-          const steps = Math.min(seg.coords.length, 20);
+        const sE=seg.startElev,eE=seg.endElev;
+        if(sE!=null&&eE!=null&&segDist>0){
+          const steps=Math.min(seg.coords.length,20);
           for(let i=0;i<steps;i++){
-            const t = i/(steps-1||1);
-            pts.push({distFromStart: cumD+segDist*t, elev: sE+(eE-sE)*t, mode: seg.mode||'river'});
+            const t=i/(steps-1||1);
+            pts.push({distFromStart:cumD+segDist*t,elev:sE+(eE-sE)*t,mode:seg.mode||'river'});
           }
         }
-        cumD += segDist;
+        cumD+=segDist;
       });
-
       if(pts.length<2) return;
 
       const n=pts.length;
@@ -1429,40 +1437,38 @@ renderMapLegend(); // 凡例を初回表示
       if(elevs.length<2) return;
       const minE=Math.floor(Math.min(...elevs)/10)*10;
       const maxE=Math.ceil(Math.max(...elevs)/10)*10;
-      const elevRange = maxE - minE || 10; // ゼロ除算防止
-      const totalDist=pts[pts.length-1].distFromStart;
+      const elevRange=maxE-minE||10;
+      const totalDist=pts[n-1].distFromStart;
       if(!totalDist||isNaN(totalDist)||totalDist<=0) return;
-      const pad={top:24,bottom:44,left:50,right:16};
+
+      // drawChartToCanvasと同じpadding・描画ロジック
+      const pad={top:20,bottom:60,left:54,right:20};
       const cW=W-pad.left-pad.right, cH=H-pad.top-pad.bottom;
       const xOf=d=>pad.left+(d/totalDist)*cW;
       const yOf=e=>pad.top+(1-(e-minE)/elevRange)*cH;
       const xOfI=i=>xOf(pts[i].distFromStart);
 
-      // 背景
+      ctx.clearRect(0,0,W,H);
       ctx.fillStyle='#f4f8fc'; ctx.fillRect(0,0,W,H);
 
-      // グリッド横線＋標高目盛り
-      const eRange=maxE-minE, eStep=eRange<=50?10:eRange<=200?50:100;
+      // グリッドと目盛り
+      const eStep=elevRange<=50?10:elevRange<=200?50:100;
+      ctx.font='11px sans-serif'; ctx.textAlign='right'; ctx.fillStyle='#666';
       ctx.strokeStyle='rgba(0,0,0,0.07)'; ctx.lineWidth=1;
-      ctx.fillStyle='#888'; ctx.font='11px sans-serif'; ctx.textAlign='right';
       for(let e=Math.ceil(minE/eStep)*eStep;e<=maxE;e+=eStep){
         const y=yOf(e);
         ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(W-pad.right,y); ctx.stroke();
         ctx.fillText(e+'m',pad.left-4,y+4);
       }
-
-      // 距離グリッド＋目盛り
       const kmStep=totalDist<=5000?1000:totalDist<=20000?5000:10000;
-      ctx.fillStyle='#888'; ctx.font='11px sans-serif'; ctx.textAlign='center';
+      ctx.textAlign='center';
       for(let d=0;d<=totalDist;d+=kmStep){
         const x=xOf(d);
-        ctx.strokeStyle='rgba(0,0,0,0.07)'; ctx.lineWidth=1;
-        ctx.beginPath(); ctx.moveTo(x,pad.top); ctx.lineTo(x,H-pad.bottom); ctx.stroke();
-        ctx.fillStyle='#888';
         ctx.fillText((d/1000).toFixed(0)+'km',x,H-pad.bottom+16);
+        ctx.beginPath(); ctx.moveTo(x,pad.top); ctx.lineTo(x,H-pad.bottom); ctx.stroke();
       }
 
-      // 塗りつぶし（赤系グラデ・出力と同じ）
+      // 塗り
       ctx.beginPath();
       ctx.moveTo(xOfI(0),yOf(pts[0].elev));
       for(let i=1;i<n;i++) ctx.lineTo(xOfI(i),yOf(pts[i].elev));
@@ -1470,69 +1476,62 @@ renderMapLegend(); // 凡例を初回表示
       ctx.lineTo(xOfI(0),H-pad.bottom);
       ctx.closePath();
       const grd=ctx.createLinearGradient(0,pad.top,0,H-pad.bottom);
-      grd.addColorStop(0,'rgba(220,38,38,0.22)');
-      grd.addColorStop(1,'rgba(220,38,38,0.02)');
+      grd.addColorStop(0,'rgba(220,38,38,.2)');
+      grd.addColorStop(1,'rgba(220,38,38,.02)');
       ctx.fillStyle=grd; ctx.fill();
 
-      // セグメントごとにルート線を描画（移動手段の色）
+      // ルートライン（区間ごとの色）
       let si=0;
       data.segments.forEach(seg=>{
-        if(!seg.coords||seg.startElev==null)return;
+        if(!seg.coords||!seg.coords.length) return;
         const cfg=(window.MODE_CONFIG&&MODE_CONFIG[seg.mode||'river'])||{color:'#1B00FF'};
-        const segPtCount=seg.elevPts&&seg.elevPts.length>1?seg.elevPts.length:seg.coords.length;
+        const segPts=seg.elevPts&&seg.elevPts.length>1?seg.elevPts.length:Math.min(seg.coords.length,20);
         ctx.beginPath();
-        for(let i=0;i<segPtCount;i++){
-          const p=pts[si+i]; if(!p) continue;
-          i===0?ctx.moveTo(xOf(p.distFromStart),yOf(p.elev)):ctx.lineTo(xOf(p.distFromStart),yOf(p.elev));
+        for(let k=0;k<segPts;k++){
+          const p=pts[si+k]; if(!p) continue;
+          k===0?ctx.moveTo(xOf(p.distFromStart),yOf(p.elev)):ctx.lineTo(xOf(p.distFromStart),yOf(p.elev));
         }
         ctx.strokeStyle=cfg.color; ctx.lineWidth=2.5; ctx.lineJoin='round'; ctx.stroke();
-        si+=segPtCount;
+        si+=segPts;
       });
 
-      // ポイントマーカー（Start/Goal/中間）＋ラベル
+      // ポイントマーカー
       let cumD2=0;
       const ptColors=['#27ae60',...data.points.slice(1,-1).map(()=>'#f59e0b'),'#e74c3c'];
       data.points.forEach((pt,pi)=>{
-        if(pi>0) cumD2+=(data.segments[pi-1]?.distM||0);
+        if(pi>0) cumD2+=(data.segments[pi-1]?.distM||data.segments[pi-1]?.distKm*1000||0);
         if(pi>=data.points.length-1) cumD2=totalDist;
         const x=xOf(cumD2);
-        const closestPt=pts.reduce((best,p)=>Math.abs(p.distFromStart-cumD2)<Math.abs(best.distFromStart-cumD2)?p:best,pts[0]);
-        const y=yOf(closestPt.elev);
-        // 縦破線
+        const cp=pts.reduce((b,p)=>Math.abs(p.distFromStart-cumD2)<Math.abs(b.distFromStart-cumD2)?p:b,pts[0]);
+        const y=yOf(cp.elev);
         ctx.strokeStyle=ptColors[pi]||'#f59e0b'; ctx.lineWidth=1; ctx.setLineDash([4,3]);
         ctx.globalAlpha=0.4;
         ctx.beginPath(); ctx.moveTo(x,pad.top); ctx.lineTo(x,H-pad.bottom); ctx.stroke();
         ctx.setLineDash([]); ctx.globalAlpha=1;
-        // 丸マーカー
         ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2);
         ctx.fillStyle=ptColors[pi]||'#f59e0b'; ctx.fill();
         ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
-        // ラベルバッジ（グラフ上端に収まるよう位置調整）
         const lbl=pi===0?'Start':pi===data.points.length-1?'Goal':'P'+pi;
         ctx.font='bold 10px sans-serif'; ctx.textAlign='center';
         const lw=ctx.measureText(lbl).width+10;
         const lx=Math.min(Math.max(x-lw/2,pad.left+2),W-pad.right-lw-2);
-        // ラベルをマーカーの上に配置。上端に近い場合は下に配置
-        const lblAbove = y - 22 >= pad.top + 2;
-        const lblY = lblAbove ? y - 22 : y + 8;
+        const lblAbove=y-22>=pad.top+2;
+        const lblY=lblAbove?y-22:y+8;
         ctx.fillStyle=ptColors[pi]||'#f59e0b';
         ctx.beginPath();
-        if(ctx.roundRect) ctx.roundRect(lx, lblY, lw, 16, 4);
-        else ctx.rect(lx, lblY, lw, 16);
+        if(ctx.roundRect) ctx.roundRect(lx,lblY,lw,16,4);
+        else ctx.rect(lx,lblY,lw,16);
         ctx.fill();
-        ctx.fillStyle='#fff';
-        ctx.fillText(lbl, x, lblY + 11);
+        ctx.fillStyle='#fff'; ctx.fillText(lbl,x,lblY+11);
       });
 
       // 軸ラベル
       ctx.save();
-      ctx.translate(12,pad.top+cH/2);
-      ctx.rotate(-Math.PI/2);
-      ctx.textAlign='center'; ctx.fillStyle='#888'; ctx.font='10px sans-serif';
-      ctx.fillText('標高 (m)',0,0);
-      ctx.restore();
-      ctx.textAlign='center'; ctx.fillStyle='#888'; ctx.font='10px sans-serif';
-      ctx.fillText('距離 (km)',pad.left+cW/2,H-4);
+      ctx.translate(14,pad.top+cH/2); ctx.rotate(-Math.PI/2);
+      ctx.textAlign='center'; ctx.fillStyle='#666'; ctx.font='11px sans-serif';
+      ctx.fillText('標高 (m)',0,0); ctx.restore();
+      ctx.textAlign='center'; ctx.fillStyle='#666'; ctx.font='11px sans-serif';
+      ctx.fillText('距離 (km)',pad.left+cW/2,H-8);
 
     },300);
 
@@ -1739,6 +1738,13 @@ function confirmTrekDraw() {
   }
   cancelTrekDraw();
   renderPointList();
+}
+
+function toggleViewerPanel() {
+  const vp = document.getElementById('vUnifiedPanel');
+  if (!vp) return;
+  const isHidden = vp.style.display === 'none' || vp.style.display === '';
+  vp.style.display = isHidden ? 'block' : 'none';
 }
 
 function cancelTrekDraw() {
