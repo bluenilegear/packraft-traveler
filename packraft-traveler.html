@@ -1291,7 +1291,10 @@ renderMapLegend(); // 凡例を初回表示
           'style="background:rgba(255,255,255,0.2);border:none;color:#fff;border-radius:4px;padding:2px 10px;cursor:pointer;font-size:14px">✕</button>' +
       '</div>' +
       '<div id="vUnifiedData" style="padding:12px 16px;border-bottom:1px solid #dde8f0"></div>' +
-      '<div id="vChartImgWrap" style="padding:4px 8px 8px"><img id="vChartImg" style="width:100%;height:auto;max-height:200px;object-fit:fill;display:block;border-radius:4px" /></div>';
+      '<div id="vChartImgWrap" style="padding:4px 8px 8px">' +
+      '<div style="position:relative;width:100%;padding-bottom:35.6%;height:0;overflow:hidden">' +
+      '<img id="vChartImg" style="position:absolute;top:0;left:0;width:100%;height:100%;border-radius:4px;object-fit:fill" />' +
+      '</div></div>';
     document.body.appendChild(vp);
 
     // ポイントを地図に追加
@@ -3050,6 +3053,97 @@ function drawChartToCanvas(canvas) {
   drawGradPairs(ctx, gradMeasurePairs, gradMeasurePending, xOf, yOf, pad, W, H);
 }
 
+// オフスクリーンcanvasにモーダル断面図と同品質の断面図を描画
+function drawChartOffscreen(w, h) {
+  if (allElevPts.length < 2) return null;
+  const oc = document.createElement('canvas');
+  oc.width = w || 900; oc.height = h || 320;
+
+  // chart_modal_canvasに一時的にIDを付け替えて描画
+  const real = document.getElementById('chart_modal_canvas');
+  const realW = real ? real.width : 0;
+  const realH = real ? real.height : 0;
+
+  // オフスクリーンcanvasにdrawModalChartと同じ内容を直接描画
+  const W = oc.width, H = oc.height;
+  const ctx = oc.getContext('2d');
+  const pts = allElevPts, grads = localGradients, n = pts.length;
+  const elevs = pts.map(p => p.elev);
+  const minE = Math.floor(Math.min(...elevs) / 10) * 10;
+  const maxE = Math.ceil(Math.max(...elevs) / 10) * 10;
+  const totalDist = pts[n - 1].distFromStart;
+  const pad = { top: 20, bottom: 60, left: 54, right: 20 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+  const xOf = d => pad.left + (d / totalDist) * cW;
+  const yOf = e => pad.top + (1 - (e - minE) / (maxE - minE || 1)) * cH;
+  const xOfI = i => xOf(pts[i].distFromStart);
+
+  // drawModalChartと同じ描画処理（コピー）
+  ctx.fillStyle = '#f4f6fa'; ctx.fillRect(0, 0, W, H);
+
+  const elevRange = maxE - minE;
+  const elevStep = elevRange <= 50 ? 5 : elevRange <= 100 ? 10 : elevRange <= 200 ? 20 : elevRange <= 500 ? 50 : 100;
+  ctx.font = '10px monospace'; ctx.textAlign = 'right';
+  for (let e = minE; e <= maxE; e += elevStep) {
+    const y = yOf(e);
+    ctx.strokeStyle = 'rgba(0,0,0,0.07)'; ctx.lineWidth = 1; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.beginPath(); ctx.moveTo(pad.left - 5, y); ctx.lineTo(pad.left, y); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.fillText(e + 'm', pad.left - 8, y + 3);
+  }
+  const distKm = totalDist / 1000;
+  const distStep = distKm <= 5 ? 0.5 : distKm <= 10 ? 1 : distKm <= 20 ? 2 : distKm <= 50 ? 5 : 10;
+  ctx.textAlign = 'center';
+  for (let km = 0; km <= distKm + 0.001; km += distStep) {
+    const x = xOf(km * 1000);
+    if (x < pad.left || x > W - pad.right + 1) continue;
+    ctx.strokeStyle = 'rgba(0,0,0,0.07)'; ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, H - pad.bottom); ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.beginPath(); ctx.moveTo(x, H - pad.bottom); ctx.lineTo(x, H - pad.bottom + 5); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.fillText(km.toFixed(km < 10 ? 1 : 0) + 'km', x, H - pad.bottom + 16);
+  }
+
+  // 軸ラベル
+  ctx.save();
+  ctx.translate(14, pad.top + cH / 2); ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center'; ctx.fillStyle = '#666'; ctx.font = '10px monospace';
+  ctx.fillText('標高 (m)', 0, 0); ctx.restore();
+  ctx.textAlign = 'center'; ctx.fillStyle = '#555'; ctx.font = '10px monospace';
+  ctx.fillText('距離 (km)', pad.left + cW / 2, H - 4);
+
+  // 塗り
+  ctx.beginPath();
+  ctx.moveTo(xOfI(0), yOf(pts[0].elev));
+  for (let i = 1; i < n; i++) ctx.lineTo(xOfI(i), yOf(pts[i].elev));
+  ctx.lineTo(xOfI(n - 1), H - pad.bottom);
+  ctx.lineTo(xOfI(0), H - pad.bottom);
+  ctx.closePath();
+  const grd = ctx.createLinearGradient(0, pad.top, 0, H - pad.bottom);
+  grd.addColorStop(0, 'rgba(220,38,38,.2)'); grd.addColorStop(1, 'rgba(220,38,38,.02)');
+  ctx.fillStyle = grd; ctx.fill();
+
+  // ルートライン（区間色）
+  let gi = 0;
+  segments.filter(s => !s.error && s.elevPts && s.elevPts.length).forEach(seg => {
+    const sc = MODE_CONFIG[seg.mode || 'river'].color;
+    ctx.beginPath();
+    for (let k = 0; k < seg.elevPts.length; k++) {
+      const idx = gi + k; if (idx >= n) break;
+      k === 0 ? ctx.moveTo(xOfI(idx), yOf(pts[idx].elev)) : ctx.lineTo(xOfI(idx), yOf(pts[idx].elev));
+    }
+    ctx.strokeStyle = sc; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.stroke();
+    gi += seg.elevPts.length;
+  });
+
+  // 勾配計測マーカー
+  drawGradPairs(ctx, gradMeasurePairs, gradMeasurePending, xOf, yOf, pad, W, H);
+
+  return oc;
+}
+
 function drawModalChart(cursorIdx = null, fixedW = null) {
   const canvas = document.getElementById('chart_modal_canvas');
   if (!canvas || allElevPts.length < 2) return;
@@ -3476,10 +3570,9 @@ function exportPNG() {
   const endName = _tl1[_tl1.length-1];
   const routeTitle = _tl1.join(' → ');
 
-  // 断面図を専用の一時canvasに描画（chart_modal_canvasのイベントを壊さない）
-  // chart_modal_canvasに固定900pxで描画してから取得
-  const chartCanvas = document.getElementById('chart_modal_canvas');
-  drawModalChart(null, 900);
+  // オフスクリーンcanvasに断面図を描画
+  const chartCanvas = drawChartOffscreen(900, 320);
+  if (!chartCanvas) { alert('先に計測してください'); return; }
 
   // 合成キャンバス（横長SNS向け 1200×630）
   const W = 1200, H = 630;
