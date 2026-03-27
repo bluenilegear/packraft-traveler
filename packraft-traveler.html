@@ -1389,22 +1389,18 @@ renderMapLegend(); // 凡例を初回表示
         '</div>';
     }
 
-    // 断面図：オフスクリーンcanvasに描いてimgとして表示
+    // 断面図：elevPtsからptsを構築してdrawChartFromPtsで描画
     setTimeout(()=>{
       const img=document.getElementById('vChartImg');
       if(!img)return;
-      // オフスクリーンcanvasに固定サイズで描画（出力PNGと同じ比率）
-      const cvs=document.createElement('canvas');
-      const W=900, H=320;
-      cvs.width=W; cvs.height=H;
-      const ctx=cvs.getContext('2d');
 
       // elevPtsのlat/lonから距離を再計算してptsを構築
-      const pts=[];
-      let cumD=0;
+      const _pts=[], _segInfos=[];
+      let _cumD=0;
       data.segments.forEach(seg=>{
         if(!seg.coords||!seg.coords.length) return;
         const segDist=seg.distM||(seg.distKm?seg.distKm*1000:0);
+        let ptCount=0;
         if(seg.elevPts&&seg.elevPts.length>1){
           let localD=0;
           seg.elevPts.forEach((p,pi)=>{
@@ -1418,124 +1414,29 @@ renderMapLegend(); // 凡例を初回表示
                 localD+=6371000*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
               }
             }
-            pts.push({distFromStart:cumD+localD,elev:p.elev,mode:seg.mode||'river'});
+            _pts.push({distFromStart:_cumD+localD,elev:p.elev});
+            ptCount++;
           });
-          cumD+=segDist; return;
-        }
-        const sE=seg.startElev,eE=seg.endElev;
-        if(sE!=null&&eE!=null&&segDist>0){
-          const steps=Math.min(seg.coords.length,20);
-          for(let i=0;i<steps;i++){
-            const t=i/(steps-1||1);
-            pts.push({distFromStart:cumD+segDist*t,elev:sE+(eE-sE)*t,mode:seg.mode||'river'});
+          _cumD+=segDist;
+        } else {
+          const sE=seg.startElev,eE=seg.endElev;
+          if(sE!=null&&eE!=null&&segDist>0){
+            const steps=Math.min(seg.coords.length,20);
+            for(let i=0;i<steps;i++){
+              const t=i/(steps-1||1);
+              _pts.push({distFromStart:_cumD+segDist*t,elev:sE+(eE-sE)*t});
+              ptCount++;
+            }
           }
+          _cumD+=segDist;
         }
-        cumD+=segDist;
+        _segInfos.push({mode:seg.mode||'river',ptCount});
       });
-      if(pts.length<2) return;
+      if(_pts.length<2) return;
 
-      const n=pts.length;
-      const elevs=pts.map(p=>p.elev).filter(e=>e!=null&&!isNaN(e));
-      if(elevs.length<2) return;
-      const minE=Math.floor(Math.min(...elevs)/10)*10;
-      const maxE=Math.ceil(Math.max(...elevs)/10)*10;
-      const elevRange=maxE-minE||10;
-      const totalDist=pts[n-1].distFromStart;
-      if(!totalDist||isNaN(totalDist)||totalDist<=0) return;
-
-      // drawChartToCanvasと同じpadding・描画ロジック
-      const pad={top:20,bottom:60,left:54,right:20};
-      const cW=W-pad.left-pad.right, cH=H-pad.top-pad.bottom;
-      const xOf=d=>pad.left+(d/totalDist)*cW;
-      const yOf=e=>pad.top+(1-(e-minE)/elevRange)*cH;
-      const xOfI=i=>xOf(pts[i].distFromStart);
-
-      ctx.clearRect(0,0,W,H);
-      ctx.fillStyle='#f4f8fc'; ctx.fillRect(0,0,W,H);
-
-      // グリッドと目盛り
-      const eStep=elevRange<=50?10:elevRange<=200?50:100;
-      ctx.font='11px sans-serif'; ctx.textAlign='right'; ctx.fillStyle='#666';
-      ctx.strokeStyle='rgba(0,0,0,0.07)'; ctx.lineWidth=1;
-      for(let e=Math.ceil(minE/eStep)*eStep;e<=maxE;e+=eStep){
-        const y=yOf(e);
-        ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(W-pad.right,y); ctx.stroke();
-        ctx.fillText(e+'m',pad.left-4,y+4);
-      }
-      const kmStep=totalDist<=5000?1000:totalDist<=20000?5000:10000;
-      ctx.textAlign='center';
-      for(let d=0;d<=totalDist;d+=kmStep){
-        const x=xOf(d);
-        ctx.fillText((d/1000).toFixed(0)+'km',x,H-pad.bottom+16);
-        ctx.beginPath(); ctx.moveTo(x,pad.top); ctx.lineTo(x,H-pad.bottom); ctx.stroke();
-      }
-
-      // 塗り
-      ctx.beginPath();
-      ctx.moveTo(xOfI(0),yOf(pts[0].elev));
-      for(let i=1;i<n;i++) ctx.lineTo(xOfI(i),yOf(pts[i].elev));
-      ctx.lineTo(xOfI(n-1),H-pad.bottom);
-      ctx.lineTo(xOfI(0),H-pad.bottom);
-      ctx.closePath();
-      const grd=ctx.createLinearGradient(0,pad.top,0,H-pad.bottom);
-      grd.addColorStop(0,'rgba(220,38,38,.2)');
-      grd.addColorStop(1,'rgba(220,38,38,.02)');
-      ctx.fillStyle=grd; ctx.fill();
-
-      // ルートライン（区間ごとの色）
-      let si=0;
-      data.segments.forEach(seg=>{
-        if(!seg.coords||!seg.coords.length) return;
-        const cfg=(window.MODE_CONFIG&&MODE_CONFIG[seg.mode||'river'])||{color:'#1B00FF'};
-        const segPts=seg.elevPts&&seg.elevPts.length>1?seg.elevPts.length:Math.min(seg.coords.length,20);
-        ctx.beginPath();
-        for(let k=0;k<segPts;k++){
-          const p=pts[si+k]; if(!p) continue;
-          k===0?ctx.moveTo(xOf(p.distFromStart),yOf(p.elev)):ctx.lineTo(xOf(p.distFromStart),yOf(p.elev));
-        }
-        ctx.strokeStyle=cfg.color; ctx.lineWidth=2.5; ctx.lineJoin='round'; ctx.stroke();
-        si+=segPts;
-      });
-
-      // ポイントマーカー
-      let cumD2=0;
-      const ptColors=['#27ae60',...data.points.slice(1,-1).map(()=>'#f59e0b'),'#e74c3c'];
-      data.points.forEach((pt,pi)=>{
-        if(pi>0) cumD2+=(data.segments[pi-1]?.distM||data.segments[pi-1]?.distKm*1000||0);
-        if(pi>=data.points.length-1) cumD2=totalDist;
-        const x=xOf(cumD2);
-        const cp=pts.reduce((b,p)=>Math.abs(p.distFromStart-cumD2)<Math.abs(b.distFromStart-cumD2)?p:b,pts[0]);
-        const y=yOf(cp.elev);
-        ctx.strokeStyle=ptColors[pi]||'#f59e0b'; ctx.lineWidth=1; ctx.setLineDash([4,3]);
-        ctx.globalAlpha=0.4;
-        ctx.beginPath(); ctx.moveTo(x,pad.top); ctx.lineTo(x,H-pad.bottom); ctx.stroke();
-        ctx.setLineDash([]); ctx.globalAlpha=1;
-        ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2);
-        ctx.fillStyle=ptColors[pi]||'#f59e0b'; ctx.fill();
-        ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
-        const lbl=pi===0?'Start':pi===data.points.length-1?'Goal':'P'+pi;
-        ctx.font='bold 10px sans-serif'; ctx.textAlign='center';
-        const lw=ctx.measureText(lbl).width+10;
-        const lx=Math.min(Math.max(x-lw/2,pad.left+2),W-pad.right-lw-2);
-        const lblAbove=y-22>=pad.top+2;
-        const lblY=lblAbove?y-22:y+8;
-        ctx.fillStyle=ptColors[pi]||'#f59e0b';
-        ctx.beginPath();
-        if(ctx.roundRect) ctx.roundRect(lx,lblY,lw,16,4);
-        else ctx.rect(lx,lblY,lw,16);
-        ctx.fill();
-        ctx.fillStyle='#fff'; ctx.fillText(lbl,x,lblY+11);
-      });
-
-      // 軸ラベル
-      ctx.save();
-      ctx.translate(14,pad.top+cH/2); ctx.rotate(-Math.PI/2);
-      ctx.textAlign='center'; ctx.fillStyle='#666'; ctx.font='11px sans-serif';
-      ctx.fillText('標高 (m)',0,0); ctx.restore();
-      ctx.textAlign='center'; ctx.fillStyle='#666'; ctx.font='11px sans-serif';
-      ctx.fillText('距離 (km)',pad.left+cW/2,H-8);
-
-      // imgタグに設定
+      const cvs=document.createElement('canvas');
+      cvs.width=900; cvs.height=320;
+      drawChartFromPts(cvs, _pts, _segInfos);
       img.src=cvs.toDataURL('image/png');
     },300);
 
@@ -2984,6 +2885,84 @@ function closeChartModal(e) {
 }
 
 // ===== PNG出力用：canvasを指定してモーダル断面図を描画 =====
+// ===== pts配列を直接受け取って断面図を描画（閲覧URL用・完全独立） =====
+function drawChartFromPts(canvas, pts, segInfos) {
+  if (!canvas || !pts || pts.length < 2) return;
+  const W = canvas.width || 900;
+  const H = canvas.height || 320;
+  const ctx = canvas.getContext('2d');
+  const n = pts.length;
+  const elevs = pts.map(p => p.elev);
+  const minE = Math.floor(Math.min(...elevs) / 10) * 10;
+  const maxE = Math.ceil(Math.max(...elevs) / 10) * 10;
+  const eRange = maxE - minE || 10;
+  const totalDist = pts[n - 1].distFromStart;
+  if (!totalDist || totalDist <= 0) return;
+
+  const pad = { top: 20, bottom: 60, left: 54, right: 20 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+  const xOf = d => pad.left + (d / totalDist) * cW;
+  const yOf = e => pad.top + (1 - (e - minE) / eRange) * cH;
+  const xOfI = i => xOf(pts[i].distFromStart);
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#f4f8fc'; ctx.fillRect(0, 0, W, H);
+
+  // グリッドと目盛り
+  const eStep = eRange <= 50 ? 10 : eRange <= 200 ? 50 : 100;
+  ctx.font = '11px sans-serif'; ctx.textAlign = 'right'; ctx.fillStyle = '#666';
+  ctx.strokeStyle = 'rgba(0,0,0,0.07)'; ctx.lineWidth = 1;
+  for (let e = Math.ceil(minE / eStep) * eStep; e <= maxE; e += eStep) {
+    const y = yOf(e);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillText(e + 'm', pad.left - 4, y + 4);
+  }
+  const kmStep = totalDist <= 5000 ? 1000 : totalDist <= 20000 ? 5000 : 10000;
+  ctx.textAlign = 'center';
+  for (let d = 0; d <= totalDist; d += kmStep) {
+    const x = xOf(d);
+    ctx.fillText((d / 1000).toFixed(0) + 'km', x, H - pad.bottom + 16);
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, H - pad.bottom); ctx.stroke();
+  }
+
+  // 塗り（赤系グラデ）
+  ctx.beginPath();
+  ctx.moveTo(xOfI(0), yOf(pts[0].elev));
+  for (let i = 1; i < n; i++) ctx.lineTo(xOfI(i), yOf(pts[i].elev));
+  ctx.lineTo(xOfI(n - 1), H - pad.bottom);
+  ctx.lineTo(xOfI(0), H - pad.bottom);
+  ctx.closePath();
+  const grd = ctx.createLinearGradient(0, pad.top, 0, H - pad.bottom);
+  grd.addColorStop(0, 'rgba(220,38,38,.2)');
+  grd.addColorStop(1, 'rgba(220,38,38,.02)');
+  ctx.fillStyle = grd; ctx.fill();
+
+  // ルートライン（区間ごとの色）
+  let si = 0;
+  (segInfos || []).forEach(seg => {
+    const color = (MODE_CONFIG[seg.mode || 'river'] || MODE_CONFIG.river).color;
+    const cnt = seg.ptCount || 0;
+    if (cnt < 2) { si += cnt; return; }
+    ctx.beginPath();
+    for (let k = 0; k < cnt; k++) {
+      const p = pts[si + k]; if (!p) break;
+      k === 0 ? ctx.moveTo(xOf(p.distFromStart), yOf(p.elev))
+              : ctx.lineTo(xOf(p.distFromStart), yOf(p.elev));
+    }
+    ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.stroke();
+    si += cnt;
+  });
+
+  // 軸ラベル
+  ctx.save();
+  ctx.translate(14, pad.top + cH / 2); ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center'; ctx.fillStyle = '#666'; ctx.font = '11px sans-serif';
+  ctx.fillText('標高 (m)', 0, 0); ctx.restore();
+  ctx.textAlign = 'center'; ctx.fillStyle = '#666'; ctx.font = '11px sans-serif';
+  ctx.fillText('距離 (km)', pad.left + cW / 2, H - 8);
+}
+
 function drawChartToCanvas(canvas) {
   if (!canvas || allElevPts.length < 2) return;
   const savedOnclick = canvas.onclick;
