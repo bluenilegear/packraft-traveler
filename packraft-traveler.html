@@ -421,6 +421,20 @@ canvas.elev-chart-interactive { width: 100%; display: block; cursor: crosshair; 
 // ページ読み込み直後にhashを確認してviewerモードのCSSクラスを付与
 if(window.location.hash.startsWith('#viewer=')){
   document.documentElement.classList.add('viewer-mode');
+} else {
+  // 編集ページはパスワード保護
+  (function(){
+    const PW = 'BNG2026';
+    const key = 'bng_auth';
+    if(sessionStorage.getItem(key) !== PW){
+      const input = prompt('Packraft Traveler 編集ページ\nパスワードを入力してください:');
+      if(input !== PW){
+        document.documentElement.innerHTML = '<body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;background:#1a3a5c;color:#fff"><div style="text-align:center"><div style="font-size:48px;margin-bottom:16px">🔒</div><div style="font-size:20px;font-weight:700">アクセスできません</div><div style="margin-top:8px;opacity:0.7">パスワードが正しくありません</div></div></body>';
+        throw new Error('auth');
+      }
+      sessionStorage.setItem(key, PW);
+    }
+  })();
 }
 </script>
 </head>
